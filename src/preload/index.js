@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getStepCount: (botId) => ipcRenderer.invoke("anka:getStepCount", botId),
     delete: (id) => ipcRenderer.invoke("anka:delete", id),
     play: (botId, profileId) => ipcRenderer.invoke("anka:play", botId, profileId),
+    clickSlot: (botId, slot, button) => ipcRenderer.invoke("anka:clickSlot", botId, slot, button),
   },
   proxy: {
     check: (proxy) => ipcRenderer.invoke("proxy:check", proxy),
