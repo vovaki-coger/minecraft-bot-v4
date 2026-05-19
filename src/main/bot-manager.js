@@ -835,6 +835,40 @@ class BotManager {
     for (const [botId] of this.bots) await this.disconnectBot(botId).catch(() => {});
   }
 
+  // ── Живой клик по слоту (ЛКМ/ПКМ) из UI ─────────────────────────────────
+  async clickBotSlot(botId, slot, button = 0) {
+    const instance = this.bots.get(botId);
+    if (!instance?.bot) throw new Error("Бот не подключён");
+    const bot = instance.bot;
+
+    // Если открыто окно (сундук/меню) — кликаем в него
+    if (bot.currentWindow) {
+      await bot.clickWindow(slot, button, 0);
+      log.info(`[AnkaLive] clickWindow slot=${slot} button=${button}`);
+      return { success: true, mode: "window" };
+    }
+
+    // Если окно не открыто и кликнули по хотбару (слоты 36-44 = хотбар)
+    // mineflayer: инвентарь слоты 0-8 = хотбар
+    const hotbarSlot = slot <= 8 ? slot : (slot - 36);
+    if (hotbarSlot >= 0 && hotbarSlot <= 8) {
+      bot.setQuickBarSlot(hotbarSlot);
+      log.info(`[AnkaLive] setQuickBarSlot ${hotbarSlot}`);
+      return { success: true, mode: "hotbar" };
+    }
+
+    // Иначе — открываем инвентарь и кликаем
+    try {
+      const window = await bot.openChest(bot.entity);
+      await bot.clickWindow(slot, button, 0);
+      window.close();
+    } catch {
+      // Если открыть инвентарь не получилось — просто кликаем
+      await bot.clickWindow(slot, button, 0).catch(() => {});
+    }
+    return { success: true, mode: "inventory" };
+  }
+
   // ── Воспроизведение анки ──────────────────────────────────────────────────
   async playAnkaProfile(botId, steps) {
     const instance = this.bots.get(botId);
