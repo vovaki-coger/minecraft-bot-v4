@@ -834,8 +834,6 @@ class BotManager {
   async disconnectAll() {
     for (const [botId] of this.bots) await this.disconnectBot(botId).catch(() => {});
   }
-}
-
 
   // ── Воспроизведение анки ──────────────────────────────────────────────────
   async playAnkaProfile(botId, steps) {
@@ -878,5 +876,6 @@ class BotManager {
     }
     return { success: true };
   }
+}
 
 module.exports = { BotManager };
