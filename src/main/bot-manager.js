@@ -344,12 +344,13 @@ class BotManager {
       if (!win) return;
       const title = parseWindowTitle(win.title || "");
       const slots = [];
+      const winSlots = win.slots || [];
       // inventoryStart = первый слот инвентаря игрока (только слоты самого окна)
       const slotCount = win.inventoryStart > 0
         ? win.inventoryStart
-        : Math.min(win.slots.length, 54);
+        : Math.min(winSlots.length, 54);
       for (let i = 0; i < slotCount; i++) {
-        const item = win.slots[i];
+        const item = winSlots[i];
         slots.push({
           slot: i,
           name: item ? item.name : "",
@@ -361,22 +362,42 @@ class BotManager {
     };
 
     bot.on("windowOpen", (win) => {
-      log.info(`[BotManager] windowOpen: "${win.title}" slots=${win.slots?.length} invStart=${win.inventoryStart}`);
-      emitWindowSlots(win);
-      // Серверы присылают предметы чуть позже — переотправляем через 500 мс
-      const retryTimer = setTimeout(() => {
-        if (bot.currentWindow === win) emitWindowSlots(win);
-      }, 500);
-      // Подписываемся на обновление отдельных слотов
-      const slotHandler = () => {
-        if (bot.currentWindow === win) emitWindowSlots(win);
-      };
-      win.on("updateSlot", slotHandler);
+      try {
+        log.info(`[BotManager] windowOpen: "${win?.title}" slots=${win?.slots?.length} invStart=${win?.inventoryStart}`);
+        emitWindowSlots(win);
+
+        // Серверы присылают предметы чуть позже — переотправляем через 500 мс
+        setTimeout(() => {
+          try {
+            if (bot.currentWindow === win) emitWindowSlots(win);
+          } catch (e) {
+            log.warn(`[BotManager] windowOpen retry error: ${e.message}`);
+          }
+        }, 500);
+
+        // Подписываемся на обновление отдельных слотов
+        if (win && typeof win.on === "function") {
+          const slotHandler = () => {
+            try {
+              if (bot.currentWindow === win) emitWindowSlots(win);
+            } catch (e) {
+              log.warn(`[BotManager] updateSlot handler error: ${e.message}`);
+            }
+          };
+          win.on("updateSlot", slotHandler);
+        }
+      } catch (err) {
+        log.error(`[BotManager] windowOpen handler crashed: ${err.message}`);
+      }
     });
 
     bot.on("windowClose", () => {
-      log.info(`[BotManager] windowClose botId=${botId}`);
-      this.emit("bot:windowClose", { botId });
+      try {
+        log.info(`[BotManager] windowClose botId=${botId}`);
+        this.emit("bot:windowClose", { botId });
+      } catch (err) {
+        log.warn(`[BotManager] windowClose handler error: ${err.message}`);
+      }
     });
     bot.on("error", (err) => {
       log.error("Bot " + botId + " error:", err.message);
