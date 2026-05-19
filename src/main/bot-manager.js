@@ -20,6 +20,20 @@ const { LobbyHandler } = require("./lobby-handler");
 
 const RUSSIAN_OVERRIDE = `ВАЖНО: Ты общаешься НА РУССКОМ ЯЗЫКЕ. Все твои ответы должны быть на русском. `;
 
+// Преобразуют NBT-объекты {type,value} в JS-примитивы (безопасная отправка через IPC)
+function nbtToStr(v) {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && "value" in v) return nbtToStr(v.value);
+  return String(v);
+}
+function nbtToNum(v) {
+  if (v == null) return 0;
+  if (typeof v === "number") return v;
+  if (typeof v === "object" && "value" in v) return Number(v.value) || 0;
+  return Number(v) || 0;
+}
+
 // ── Паттерны авто-регистрации/логина ────────────────────────────────────────
 // Расширенные паттерны для разных серверов
 const REGISTER_PATTERNS = [
@@ -351,11 +365,15 @@ class BotManager {
         : Math.min(winSlots.length, 54);
       for (let i = 0; i < slotCount; i++) {
         const item = winSlots[i];
+        const name = item ? nbtToStr(item.name) : "";
+        const displayName = item
+          ? (nbtToStr(item.displayName) || name.replace(/_/g, " "))
+          : "";
         slots.push({
           slot: i,
-          name: item ? item.name : "",
-          displayName: item ? (item.displayName || item.name.replace(/_/g, " ")) : "",
-          count: item ? item.count : 0,
+          name,
+          displayName,
+          count: item ? nbtToNum(item.count) : 0,
         });
       }
       this.emit("bot:windowOpen", { botId, window: { title, slots } });
@@ -595,14 +613,16 @@ class BotManager {
         if (eq && !allItems.find(i => i.slot === eq.slot)) allItems.push(eq);
       }
 
-      const inventory = allItems.map(item => ({
-        slot: item.slot,
-        name: item.name,
-        count: item.count,
-        displayName: item.displayName || item.name.replace(/_/g, ' '),
-        durabilityUsed: item.durabilityUsed,
-        maxDurability: item.maxDurability,
-      }));
+      const inventory = allItems.map(item => {
+        const name = nbtToStr(item.name);
+        const displayName = nbtToStr(item.displayName) || name.replace(/_/g, " ");
+        return {
+          slot: typeof item.slot === "number" ? item.slot : nbtToNum(item.slot),
+          name,
+          displayName,
+          count: nbtToNum(item.count),
+        };
+      }).filter(i => i.slot >= 0 && i.slot <= 200);
 
       const hotbarSlot = bot.quickBarSlot ?? 0;
       instance.stats.inventory = inventory;
