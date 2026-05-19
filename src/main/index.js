@@ -157,6 +157,9 @@ function setupIpcHandlers() {
     if (!profile) throw new Error("Профиль не найден");
     return botManager.playAnkaProfile(botId, profile.steps);
   });
+  ipcMain.handle("anka:clickSlot", async (_e, botId, slot, button) =>
+    botManager.clickBotSlot(botId, slot, button)
+  );
   ipcMain.handle("shell:openExternal", (_e, url) => shell.openExternal(url));
 }
 
