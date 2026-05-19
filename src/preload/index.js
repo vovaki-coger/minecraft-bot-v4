@@ -69,9 +69,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "bot:chat", "bot:serverMessage", "bot:aiMessage", "bot:aiChatMessage",
       "bot:death", "bot:error", "bot:actionStopped", "bot:inventoryUpdated",
       "bot:survivorStarted", "bot:survivorStopped", "bot:survivorLog",
-      "bot:aiToggled", "bot:windowOpen", "bot:modelDetected",
+      "bot:aiToggled", "bot:windowOpen", "bot:windowClose", "bot:modelDetected",
       "bot:anarchyStarted", "bot:anarchyStopped", "bot:anarchyPhase", "bot:anarchyLog",
-      "bot:windowOpen", "bot:windowClose",
       "ollama:pullProgress",
       "coordinator:statusUpdate", "coordinator:taskAssigned", "coordinator:groupChat",
     ];
