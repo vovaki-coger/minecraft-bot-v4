@@ -322,14 +322,34 @@ class BotManager {
 
 
     // ── Окна инвентаря (для рекордера анки) ───────────────────────────────
-    bot.on("windowOpen", (window) => {
-      const rawTitle = window.title || "";
-      let title = rawTitle;
-      try { const p = JSON.parse(rawTitle); title = p.text || p.translate || rawTitle; } catch {}
+    const parseWindowTitle = (raw) => {
+      try {
+        const p = JSON.parse(raw);
+        // Собираем текст из extra-массива (стиль Minecraft JSON-компонента)
+        const extractText = (node) => {
+          if (!node) return "";
+          let text = node.text || node.translate || "";
+          if (Array.isArray(node.extra)) text += node.extra.map(extractText).join("");
+          if (Array.isArray(node.with)) text += node.with.map(extractText).join(" ");
+          return text;
+        };
+        const result = extractText(p);
+        return result.trim() || raw;
+      } catch {
+        return raw;
+      }
+    };
+
+    const emitWindowSlots = (win) => {
+      if (!win) return;
+      const title = parseWindowTitle(win.title || "");
       const slots = [];
-      const count = window.inventoryStart || Math.min(window.slots.length, 54);
-      for (let i = 0; i < count; i++) {
-        const item = window.slots[i];
+      // inventoryStart = первый слот инвентаря игрока (только слоты самого окна)
+      const slotCount = win.inventoryStart > 0
+        ? win.inventoryStart
+        : Math.min(win.slots.length, 54);
+      for (let i = 0; i < slotCount; i++) {
+        const item = win.slots[i];
         slots.push({
           slot: i,
           name: item ? item.name : "",
@@ -338,9 +358,24 @@ class BotManager {
         });
       }
       this.emit("bot:windowOpen", { botId, window: { title, slots } });
+    };
+
+    bot.on("windowOpen", (win) => {
+      log.info(`[BotManager] windowOpen: "${win.title}" slots=${win.slots?.length} invStart=${win.inventoryStart}`);
+      emitWindowSlots(win);
+      // Серверы присылают предметы чуть позже — переотправляем через 500 мс
+      const retryTimer = setTimeout(() => {
+        if (bot.currentWindow === win) emitWindowSlots(win);
+      }, 500);
+      // Подписываемся на обновление отдельных слотов
+      const slotHandler = () => {
+        if (bot.currentWindow === win) emitWindowSlots(win);
+      };
+      win.on("updateSlot", slotHandler);
     });
 
     bot.on("windowClose", () => {
+      log.info(`[BotManager] windowClose botId=${botId}`);
       this.emit("bot:windowClose", { botId });
     });
     bot.on("error", (err) => {
@@ -841,30 +876,39 @@ class BotManager {
     if (!instance?.bot) throw new Error("Бот не подключён");
     const bot = instance.bot;
 
-    // Если открыто окно (сундук/меню) — кликаем в него
+    // ── Случай 1: у бота открыто окно (сундук / меню лобби) ──────────────
     if (bot.currentWindow) {
       await bot.clickWindow(slot, button, 0);
-      log.info(`[AnkaLive] clickWindow slot=${slot} button=${button}`);
+      log.info(`[AnkaLive] clickWindow slot=${slot} button=${button} window="${bot.currentWindow.title}"`);
       return { success: true, mode: "window" };
     }
 
-    // Если окно не открыто и кликнули по хотбару (слоты 36-44 = хотбар)
-    // mineflayer: инвентарь слоты 0-8 = хотбар
-    const hotbarSlot = slot <= 8 ? slot : (slot - 36);
-    if (hotbarSlot >= 0 && hotbarSlot <= 8) {
-      bot.setQuickBarSlot(hotbarSlot);
-      log.info(`[AnkaLive] setQuickBarSlot ${hotbarSlot}`);
-      return { success: true, mode: "hotbar" };
+    // ── Случай 2: хотбар (mineflayer слоты 36–44, или 0–8 в UI) ──────────
+    // mineflayer: bot.inventory.items() возвращает слоты 36–44 для хотбара
+    const isHotbar = (slot >= 36 && slot <= 44) || (slot >= 0 && slot <= 8);
+    const hotbarIndex = slot >= 36 ? slot - 36 : slot;   // 0–8
+
+    if (isHotbar) {
+      // Сначала выбираем слот
+      bot.setQuickBarSlot(hotbarIndex);
+      log.info(`[AnkaLive] setQuickBarSlot(${hotbarIndex}) button=${button}`);
+
+      if (button === 1) {
+        // ПКМ — использовать предмет (открыть сундук/меню, съесть, и т.д.)
+        await new Promise(r => setTimeout(r, 150));
+        bot.activateItem();
+        log.info(`[AnkaLive] activateItem() — ожидаем windowOpen от сервера`);
+      }
+      return { success: true, mode: "hotbar", hotbarIndex };
     }
 
-    // Иначе — открываем инвентарь и кликаем
+    // ── Случай 3: основной инвентарь (слоты 9–35) ────────────────────────
+    // clickWindow работает для инвентаря без явного открытия окна
     try {
-      const window = await bot.openChest(bot.entity);
       await bot.clickWindow(slot, button, 0);
-      window.close();
-    } catch {
-      // Если открыть инвентарь не получилось — просто кликаем
-      await bot.clickWindow(slot, button, 0).catch(() => {});
+      log.info(`[AnkaLive] inventory clickWindow slot=${slot} button=${button}`);
+    } catch (err) {
+      log.warn(`[AnkaLive] inventory clickWindow failed: ${err.message}`);
     }
     return { success: true, mode: "inventory" };
   }
