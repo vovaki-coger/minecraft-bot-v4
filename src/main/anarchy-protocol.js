@@ -44,6 +44,7 @@ class AnarchyProtocol {
     this.isRunning = false;
     this._task = "";
     this._homeCommand = "/home";
+    this._rtpCommand = "";
     this._cycleMinutes = 5;
     this._maxInventorySlots = 28;
     this._loop = null;
@@ -56,10 +57,11 @@ class AnarchyProtocol {
 
   // ── Запуск ──────────────────────────────────────────────────────────
 
-  async start({ task, homeCommand = "/home", cycleMinutes = 5, maxInventory = 28 }) {
+  async start({ task, homeCommand = "/home", rtpCommand = "", cycleMinutes = 5, maxInventory = 28 }) {
     if (this.isRunning) await this.stop();
     this._task = task;
     this._homeCommand = homeCommand;
+    this._rtpCommand = rtpCommand;
     this._cycleMinutes = cycleMinutes;
     this._maxInventorySlots = maxInventory;
     this.isRunning = true;
@@ -87,6 +89,7 @@ class AnarchyProtocol {
       isRunning: this.isRunning,
       task: this._task,
       homeCommand: this._homeCommand,
+      rtpCommand: this._rtpCommand,
       phase: this._phase,
       cycleCount: this._cycleCount,
       log: this._log.slice(-50),
@@ -119,45 +122,38 @@ class AnarchyProtocol {
     const bot = this.bot;
     if (!bot?.entity) { await sleep(3000); return; }
 
-    this._addLog(`⚙️ Выполняю задачу: "${this._task}"`);
+    this._addLog(`⚙️ Начинаю задачу: "${this._task}"`);
 
     const startTime = Date.now();
     const maxMs = this._cycleMinutes * 60 * 1000;
+    const tm = this.instance.taskManager;
+    const parsedTask = this._parseAnarchyTask(this._task);
 
-    // Отправляем задачу в AIBrain
-    if (this.instance.aiBrain) {
-      this.instance.aiBrain.respondToPlayer("AnarchyProtocol", this._task).catch(() => {});
-    } else {
-      // Fallback: отправляем как Andy-4 команду напрямую
-      bot.chat(this._task.slice(0, 100));
-    }
-
-    // Ждём N минут ИЛИ пока инвентарь не заполнится
     while (this.isRunning && (Date.now() - startTime) < maxMs) {
-      await sleep(15000);  // проверяем каждые 15 секунд
-
-      // Проверяем заполненность инвентаря
       const items = bot.inventory?.items() || [];
       if (items.length >= this._maxInventorySlots) {
-        this._addLog(`📦 Инвентарь заполнен (${items.length} слотов). Иду на базу...`);
-        break;
+        this._addLog(`📦 Инвентарь заполнен (${items.length}/${this._maxInventorySlots}). Иду на базу!`);
+        return;
       }
-
       const elapsed = Math.round((Date.now() - startTime) / 1000);
-      const remaining = Math.round((maxMs - (Date.now() - startTime)) / 1000);
+      const remaining = Math.round(this._cycleMinutes * 60 - elapsed);
+      this._addLog(`▶️ Запускаю задачу (${elapsed}с прошло, осталось ${remaining}с, инвентарь: ${items.length}/${this._maxInventorySlots})`);
 
-      if (elapsed % 60 < 15) {  // логируем раз в минуту
-        const items_count = items.length;
-        this._addLog(`⏱️ Задача: ${elapsed}с из ${this._cycleMinutes * 60}с | Инвентарь: ${items_count}/${this._maxInventorySlots}`);
-      }
-
-      // Повторно напоминаем AIBrain о задаче каждые 2 минуты
-      if (elapsed > 0 && elapsed % 120 < 15 && this.instance.aiBrain) {
-        this.instance.aiBrain.respondToPlayer("AnarchyProtocol", 
-          `Продолжай задачу: ${this._task}`
-        ).catch(() => {});
-      }
+      if (parsedTask && tm) {
+        await tm.runTask(parsedTask.name, parsedTask.args).catch(err => {
+          this._addLog(`⚠️ Задача: ${err?.message || 'готово'}`);
+        });
+        await sleep(2000);
+      } else if (this.instance.aiBrain) {
+        this.instance.aiBrain.respondToPlayer("AnarchyProtocol", this._task).catch(() => {});
+        await sleep(60000);
+        const afterItems = bot.inventory?.items() || [];
+        if (afterItems.length >= this._maxInventorySlots) {
+          this._addLog(`📦 Инвентарь заполнен. Иду на базу!`); return;
+        }
+      } else { await sleep(30000); }
     }
+    this._addLog(`⏱️ Время вышло (${this._cycleMinutes} мин). Иду домой.`);
   }
 
   // ── Фаза возврата на базу ────────────────────────────────────────────
@@ -203,6 +199,12 @@ class AnarchyProtocol {
 
     this._addLog(`✅ База готова. Возвращаюсь к задаче.`);
     this._setPhase("resuming");
+
+    if (this._rtpCommand && bot?.entity) {
+      this._addLog(`🌐 RTP: ${this._rtpCommand}`);
+      bot.chat(this._rtpCommand);
+      await sleep(6000);
+    }
     await sleep(1000);
   }
 
@@ -313,6 +315,21 @@ class AnarchyProtocol {
   }
 
   // ── Утилиты ─────────────────────────────────────────────────────────
+
+  _parseAnarchyTask(task) {
+    const t = task.toLowerCase();
+    if (/руби|рубить|дерев|wood|log/.test(t)) {
+      const m = t.match(/(\d+)/);
+      return { name: "gather_wood", args: { count: m ? parseInt(m[1]) : 32 } };
+    }
+    if (/камень|cobble|stone/.test(t)) {
+      const m = t.match(/(\d+)/);
+      return { name: "gather_stone", args: { count: m ? parseInt(m[1]) : 64 } };
+    }
+    if (/еда|охот|корова|свинья|food|hunt/.test(t)) return { name: "gather_food", args: {} };
+    if (/исследу|explore|гуля/.test(t)) return { name: "explore", args: {} };
+    return null;
+  }
 
   _setPhase(phase) {
     this._phase = phase;

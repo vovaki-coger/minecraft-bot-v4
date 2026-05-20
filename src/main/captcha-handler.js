@@ -1,10 +1,16 @@
 const log = require("electron-log");
 
 const REGISTER_PATTERNS = [
-  /\/register/i, /зарегистрируйтесь/i, /register/i, /\/reg /i,
+  /\/register/i, /зарегистрируйтесь/i, /register/i, /\/reg\b/i,
+  /please register/i, /use \/register/i, /введите \/register/i,
+  /вы не зарегистрированы/i, /not registered/i, /register to play/i,
+  /type \/register/i, /to register/i, /для регистрации/i, /нужно зарегистрироваться/i,
 ];
 const LOGIN_PATTERNS = [
   /\/login/i, /войдите/i, /авторизуйтесь/i, /login/i,
+  /please log in/i, /use \/login/i, /введите \/login/i,
+  /you must log in/i, /вы не авторизованы/i, /not logged in/i,
+  /type \/login/i, /авторизируйся/i, /для входа/i, /чтобы войти/i, /войди/i,
 ];
 const MATH_PATTERN = /(\d+)\s*([+\-*\/])\s*(\d+)/;
 const WRITE_NUMBER_PATTERN = /напишите\s+(\d+)/i;
@@ -55,7 +61,7 @@ class CaptchaHandler {
   }
 
   _isComplexCaptcha(message) {
-    const keywords = ["капча", "captcha", "докажи", "verify", "verification", "какой цвет", "what color", "сколько"];
+    const keywords = ["капча","captcha","докажи","verify","verification","какой цвет","what color","сколько","антибот","anti-bot","нажми","введи код","enter code","подтверди","confirm","are you human"];
     return keywords.some((k) => message.toLowerCase().includes(k));
   }
 

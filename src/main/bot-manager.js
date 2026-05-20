@@ -52,10 +52,10 @@ const REGISTER_PATTERNS = [
 ];
 
 const LOGIN_PATTERNS = [
-  /\/login/i, /войдите/i, /авторизуйтесь/i, /please log in/i,
-  /use \/login/i, /введите \/login/i, /you must log in/i,
-  /please authenticate/i, /enter your password/i, /введите пароль/i,
-  /вы не авторизованы/i, /not logged in/i, /type \/login/i,
+  /\/login/i, /войдите/i, /авторизуйтесь/i, /login/i,
+  /please log in/i, /use \/login/i, /введите \/login/i,
+  /you must log in/i, /вы не авторизованы/i, /not logged in/i,
+  /type \/login/i, /авторизируйся/i, /для входа/i, /чтобы войти/i, /войди/i,
 ];
 
 class BotInstance {
@@ -248,6 +248,29 @@ class BotManager {
       movements.allow1by1towers = false; // Убираем прыжки-башни (тоже детектируются)
       bot.pathfinder.setMovements(movements);
 
+      
+      // ── Самооборона ──────────────────────────────────────────────────
+      let prevHealth = bot.health || 20;
+      bot.on('health', () => {
+        if (!bot.entity) return;
+        const newHealth = bot.health || 20;
+        if (newHealth < prevHealth && instance.config.selfDefense !== false) {
+          let attacker = null, minDist = 7;
+          for (const e of Object.values(bot.entities)) {
+            if (!e.position || e === bot.entity) continue;
+            const isPlayer = e.type === 'player' || (e.username && e.username !== bot.username);
+            if (!isPlayer) continue;
+            const dist = bot.entity.position.distanceTo(e.position);
+            if (dist < minDist) { minDist = dist; attacker = e; }
+          }
+          if (attacker?.isValid) {
+            try { bot.lookAt(attacker.position.offset(0, (attacker.height||1.8)*0.85, 0)); } catch {}
+            if (bot.pvp) bot.pvp.attack(attacker);
+            else setTimeout(() => { try { bot.attack(attacker); } catch {} }, 100);
+          }
+        }
+        prevHealth = newHealth;
+      });
       this.emit("bot:statusChanged", { botId, status: "online" });
       this._addChat(instance, "system", "✅ Бот подключился к серверу. ИИ-мозг активирован.");
 
@@ -450,12 +473,15 @@ class BotManager {
   // ── Первоначальная авто-аутентификация при спавне ─────────────────────────
   async _tryInitialAuth(instance) {
     const pass = this.configManager.getGlobalPassword();
-    if (!pass || instance._authAttempted) return;
-    // Не пытаемся авторизоваться если это похоже на обычный сервер без авторизации
-    // Просто ждём сообщения — setTimeout в _attachEvents это уже сделает
-    // Этот метод — дополнительная попытка для серверов которые не отправляют чат-приглашение
-    // Не шлём сразу, просто логируем готовность
-    log.info("[BotManager] Auth ready, waiting for server prompt...");
+    if (!pass) return;
+    setTimeout(() => {
+      if (instance._authAttempted || !instance.bot) return;
+      if (!instance.config.autoLogin) return;
+      log.info("[BotManager] No auth prompt received, trying /login proactively");
+      instance._authAttempted = true;
+      instance.bot.chat("/login " + pass);
+      this._addChat(instance, "system", "🔑 Авто-логин (без приглашения)");
+    }, 5000);
   }
 
   // ── Обработка авто-логина из chat-события ────────────────────────────────

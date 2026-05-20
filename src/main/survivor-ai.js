@@ -91,6 +91,7 @@ class SurvivorAI {
     this._log("Умер, продолжаю выживание после возрождения...");
     if (this.currentStage > 2) this.currentStage -= 1;
     this.failedActions.clear();
+    this._failCounts = {};
     this.stuckCounter = 0;
   }
 
@@ -120,7 +121,7 @@ class SurvivorAI {
 
     // Запоминаем действие
     this._recordAction(decision);
-    this._log(`[${stage}] ИИ решил: ${decision.action}${decision.target ? " → " + decision.target : ""}${decision.think ? " (думал: " + decision.think.slice(0, 80) + "...)" : ""}`);
+    this._log(`[${stage}] ИИ решил: ${decision.action}${decision.target ? " → " + decision.target : ""}${decision.think ? " (думал: " + String(decision.think || "").slice(0, 60) + "...)" : ""}`);
 
     this.emit("bot:survivorLog", {
       botId: this.instance.id,
@@ -323,17 +324,23 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
   }
 
   _getSmartFallback(stage) {
+    const woodAlts = ["oak_log","birch_log","spruce_log","jungle_log","acacia_log","dark_oak_log"];
+    const isWoodFailed = woodAlts.every(w => this.failedActions.has("collect_block:" + w));
     const fallbacks = {
-      wood_gathering: { action: "collect_block", target: "oak_log", think: "Собираю дерево" },
+      wood_gathering: isWoodFailed
+        ? { action: "jump_and_move", target: null, think: "Дерево не найдено — исследую" }
+        : { action: "collect_block", target: "oak_log", think: "Собираю дерево" },
       crafting_workbench: { action: "craft_item", target: "crafting_table", think: "Крафчу верстак" },
-      crafting_tools: { action: "craft_item", target: "wooden_pickaxe", think: "Крафчу кирку" },
+      crafting_tools: this.failedActions.has("craft_item:wooden_pickaxe")
+        ? { action: "collect_block", target: "oak_log", think: "Ещё дерева нужно" }
+        : { action: "craft_item", target: "wooden_pickaxe", think: "Крафчу кирку" },
       food_gathering: { action: "attack_entity", target: "cow", think: "Ищу еду" },
-      building_shelter: { action: "collect_block", target: "oak_log", think: "Собираю блоки для постройки" },
+      building_shelter: { action: "collect_block", target: "oak_log", think: "Собираю блоки" },
       mining_stone: { action: "collect_block", target: "stone", think: "Добываю камень" },
       mining_iron: { action: "move_to_block", target: "iron_ore", think: "Иду к железной руде" },
       smelting_iron: { action: "craft_item", target: "furnace", think: "Крафчу печку" },
       iron_tools: { action: "craft_item", target: "iron_pickaxe", think: "Крафчу железную кирку" },
-      default: { action: "look_around", target: null, think: "Осматриваюсь" },
+      default: { action: "jump_and_move", target: null, think: "Осматриваюсь" },
     };
     return fallbacks[stage] || fallbacks.default;
   }
@@ -380,10 +387,14 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
 
   async _actCollectBlock(bot, blockName) {
     if (!blockName) return false;
-    // Попытаемся найти похожие блоки если точный не найден
     const candidates = this._blockCandidates(bot, blockName);
+    let searchRadius = 48;
+    const failKey = "collect_block:" + blockName;
+    const failCount = this._getFailCount(failKey);
+    if (failCount > 0) searchRadius = Math.min(48 + failCount * 32, 160);
+
     for (const id of candidates) {
-      const block = bot.findBlock({ matching: id, maxDistance: 48 });
+      const block = bot.findBlock({ matching: id, maxDistance: searchRadius });
       if (block) {
         await bot.pathfinder.goto(
           new goals.GoalBlock(block.position.x, block.position.y, block.position.z)
@@ -392,12 +403,33 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
         const refreshed = bot.blockAt(block.position);
         if (refreshed && refreshed.name !== "air") {
           await bot.dig(refreshed).catch(() => {});
+          this._failCounts = {};
           return true;
         }
       }
     }
-    this._log("Не нашёл блок для сбора: " + blockName);
+    this._log("Блок " + blockName + " не найден (r=" + searchRadius + "м), исследую...");
+    this._incFailCount(failKey);
+    if (bot.entity) {
+      const pos = bot.entity.position;
+      const attempt = this._getFailCount(failKey) || 0;
+      const angle = (attempt / 8) * Math.PI * 2;
+      const dist = 40 + attempt * 25;
+      await bot.pathfinder.goto(new goals.GoalNear(
+        pos.x + Math.cos(angle) * dist, pos.y, pos.z + Math.sin(angle) * dist, 4
+      )).catch(() => {});
+    }
     return false;
+  }
+
+  _getFailCount(key) {
+    if (!this._failCounts) this._failCounts = {};
+    return this._failCounts[key] || 0;
+  }
+
+  _incFailCount(key) {
+    if (!this._failCounts) this._failCounts = {};
+    this._failCounts[key] = (this._failCounts[key] || 0) + 1;
   }
 
   async _actAttackEntity(bot, entityName) {
@@ -665,6 +697,7 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
     if (advance && this.currentStage < SURVIVOR_STAGES.length - 1) {
       this.currentStage++;
       this.failedActions.clear();
+      this._failCounts = {};
       this.actionMemory = [];
       this.conversationHistory = [];
       const nextStage = SURVIVOR_STAGES[this.currentStage];

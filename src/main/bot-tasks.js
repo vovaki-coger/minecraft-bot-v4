@@ -61,6 +61,8 @@ class TaskManager {
         case "attack":       await this._taskAttackMob(args.target); break;
         case "walk_to":      await this._taskWalkTo(args.x, args.y, args.z); break;
         case "explore":      await this._taskExplore(); break;
+        case "farm_trees":   await this._taskFarmTrees(args.radius || 20, args.crop || "oak"); break;
+        case "pvp_attack":   await this._taskPvpAttack(args.target); break;
         case "inventory":    this._reportInventory(); break;
         case "status":       this._reportStatus(); break;
         default:
@@ -106,19 +108,37 @@ class TaskManager {
   async _taskGatherWood(count) {
     this._chat("Иду рубить дерево, нужно " + count + " бревён!");
     const logIds = ["oak_log","birch_log","spruce_log","jungle_log","acacia_log","dark_oak_log","mangrove_log","cherry_log"]
-      .map(n => this.bot.registry.blocksByName[n]?.id)
-      .filter(Boolean);
+      .map(n => this.bot.registry.blocksByName[n]?.id).filter(Boolean);
 
     let collected = 0;
-    while (this._running && collected < count) {
-      const block = this.bot.findBlock({ matching: logIds, maxDistance: 64 });
-      if (!block) { this._chat("Нет деревьев рядом!"); break; }
+    let searchRadius = 64;
+    let exploreAttempts = 0;
 
+    while (this._running && collected < count) {
+      const block = this.bot.findBlock({ matching: logIds, maxDistance: searchRadius });
+
+      if (!block) {
+        if (exploreAttempts >= 8) {
+          this._chat("Не нашёл деревьев даже после исследования. Собрал: " + collected);
+          break;
+        }
+        this._log("Деревьев нет в " + searchRadius + "м, исследую...");
+        const pos = this.bot.entity.position;
+        const angle = (exploreAttempts / 8) * Math.PI * 2;
+        const dist = 40 + exploreAttempts * 20;
+        await this.bot.pathfinder.goto(new goals.GoalNear(
+          pos.x + Math.cos(angle) * dist, pos.y, pos.z + Math.sin(angle) * dist, 4
+        )).catch(() => {});
+        searchRadius = Math.min(searchRadius + 32, 192);
+        exploreAttempts++;
+        continue;
+      }
+
+      exploreAttempts = 0;
       await this.bot.pathfinder.goto(
         new goals.GoalBlock(block.position.x, block.position.y, block.position.z)
       ).catch(() => {});
       if (!this._running) break;
-
       await this.bot.dig(block).catch(() => {});
       collected++;
       if (collected % 5 === 0) this._log("Собрано " + collected + "/" + count + " бревён");
@@ -424,7 +444,15 @@ function parseCommand(message, botName) {
     return { task: "gather_food" };
   }
 
-  // --- ФЕРМА ---
+  // --- ФЕРМА ДЕРЕВЬЕВ ---
+  if (/ферм.{0,8}дерев|дерево.{0,8}ферм|руби.{0,8}зон|farm.{0,8}tree|сажай дерев|вырашив/.test(clean)) {
+    const radiusM = clean.match(/(\d+)/);
+    const cropM = clean.match(/(дуб|берёза|берез|ель|акация|oak|birch|spruce|jungle|acacia|dark_oak)/);
+    const cropMap = { 'дуб':'oak','oak':'oak','берёза':'birch','берез':'birch','birch':'birch','ель':'spruce','spruce':'spruce','jungle':'jungle','акация':'acacia','acacia':'acacia','dark_oak':'dark_oak' };
+    return { task: "farm_trees", radius: radiusM ? Math.min(parseInt(radiusM[1]), 60) : 20, crop: cropM ? (cropMap[cropM[1].toLowerCase()] || 'oak') : 'oak' };
+  }
+
+  // --- ФЕРМА ПШЕНИЦЫ ---
   if (/построй ферм|сделай ферм|посади (семена|пшениц|ферм|огород)|farm/.test(clean)) {
     const m = clean.match(/(\d+)/);
     return { task: "build_farm", size: m ? Math.min(parseInt(m[1]), 8) : 4 };

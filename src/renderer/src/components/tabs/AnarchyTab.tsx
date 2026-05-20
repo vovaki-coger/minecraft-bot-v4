@@ -32,6 +32,7 @@ export default function AnarchyTab() {
 
   const [task, setTask] = useState("Добывай дерево и камень для строительства");
   const [homeCmd, setHomeCmd] = useState("/home");
+  const [rtpCmd, setRtpCmd] = useState("");
   const [cycleMin, setCycleMin] = useState(5);
   const [maxInv, setMaxInv] = useState(28);
   const [state, setState] = useState<AnarchyState | null>(null);
@@ -79,7 +80,7 @@ export default function AnarchyTab() {
   async function startAnarchy() {
     if (!bot?.id) return;
     await (window.electronAPI?.bot as any).startAnarchy(bot.id, {
-      task, homeCommand: homeCmd, cycleMinutes: cycleMin, maxInventory: maxInv,
+      task, homeCommand: homeCmd, rtpCommand: rtpCmd, cycleMinutes: cycleMin, maxInventory: maxInv,
     });
   }
 
@@ -176,6 +177,23 @@ export default function AnarchyTab() {
                   placeholder="/home"
                 />
               </div>
+              <div className="flex-1">
+                <label className="text-xs mb-1 block" style={{ color: "#888" }}>
+                  RTP-команда (опционально):
+                </label>
+                <input
+                  type="text"
+                  value={rtpCmd}
+                  onChange={e => setRtpCmd(e.target.value)}
+                  disabled={isRunning}
+                  className="w-full text-xs p-2 rounded"
+                  style={{
+                    background: "#1a1a1a", border: "1px solid #1a3a3a",
+                    color: isRunning ? "#555" : "#e8e8e8", fontFamily: "monospace", outline: "none",
+                  }}
+                  placeholder="/rtp, /wild, /randomtp..."
+                />
+              </div>
               <div style={{ width: 80 }}>
                 <label className="text-xs mb-1 block" style={{ color: "#888" }}>
                   Цикл (мин):
@@ -258,7 +276,7 @@ export default function AnarchyTab() {
               <div style={{ color: "#888" }}>Циклов завершено:</div>
               <div style={{ color: "#2ec4b6" }}>{state?.cycleCount ?? 0}</div>
               <div style={{ color: "#888" }}>База:</div>
-              <div style={{ color: "#f39c12", fontFamily: "monospace" }}>{state?.homeCommand}</div>
+              <div style={{ color: "#f39c12", fontFamily: "monospace" }}>{state?.homeCommand}{state?.rtpCommand ? <><br/><span style={{color:"#2ec4b6"}}>RTP: {state.rtpCommand}</span></> : null}</div>
             </div>
           </div>
         )}
