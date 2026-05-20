@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAppStore } from "../../store/appStore";
-import BotControls from "../BotControls";
+import AnkaRecorder from "../AnkaRecorder";
 import ModelsTab from "../tabs/ModelsTab";
 import SettingsTab from "../tabs/SettingsTab";
 import CoordinatorTab from "../tabs/CoordinatorTab";
@@ -10,7 +10,20 @@ import BotEditModal from "../BotEditModal";
 export default function LeftPanel() {
   const { activeTab, bots, selectedBotId } = useAppStore();
   const selectedBot = bots.find((b) => b.id === selectedBotId) || null;
-  const [editOpen, setEditOpen] = useState(false);
+  const [nickInput, setNickInput] = useState("");
+  const [showNick, setShowNick]   = useState(false);
+  const [editOpen, setEditOpen]   = useState(false);
+
+  async function handleDelete() {
+    if (!selectedBot || !confirm(`Удалить бота ${selectedBot.config.nick}?`)) return;
+    await window.electronAPI.bot.delete(selectedBot.id);
+  }
+
+  async function handleNickChange() {
+    if (!nickInput.trim() || !selectedBot) return;
+    await window.electronAPI.bot.setNick(selectedBot.id, nickInput.trim());
+    setNickInput(""); setShowNick(false);
+  }
 
   const content = () => {
     switch (activeTab) {
@@ -20,41 +33,45 @@ export default function LeftPanel() {
       case "anarchy":     return <AnarchyTab />;
       default:
         return (
-          <div className="flex flex-col h-full overflow-hidden">
-            <div className="px-3 py-2 border-b text-xs font-mono" style={{ borderColor: "#3a3a3a", color: "#7ecc49" }}>
+          <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+            <div style={{ padding: "6px 10px", borderBottom: "1px solid #1a2040", fontSize: 11, color: "#2a3a5a", fontFamily: "monospace" }}>
               Управление ботом
             </div>
-            <div className="flex-1 overflow-y-auto p-2">
+            <div style={{ flex: 1, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 7 }}>
               {selectedBot ? (
                 <>
-                  <div className="panel p-2 mb-2">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs mb-0.5" style={{ color: "#888" }}>Активный бот</div>
-                        <div className="text-sm font-mono truncate" style={{ color: "#7ecc49" }}>
-                          {selectedBot.config.nick}
-                        </div>
-                        <div className="text-xs mt-0.5 truncate" style={{ color: "#555" }}>
-                          {selectedBot.config.host}:{selectedBot.config.port} · v{selectedBot.config.version}
-                        </div>
-                        <div className="text-xs truncate" style={{ color: "#555" }}>
-                          ИИ: {selectedBot.config.aiModel?.split(":")[0] || "—"}
-                        </div>
-                      </div>
-                      <button
-                        className="btn text-xs ml-2 flex-shrink-0"
-                        onClick={() => setEditOpen(true)}
-                        title="Редактировать настройки бота"
-                        style={{ padding: "3px 8px", fontSize: 11 }}
-                      >
-                        ✏️ Изменить
-                      </button>
-                    </div>
+                  {/* Nick / Delete controls */}
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {showNick ? (
+                      <>
+                        <input
+                          autoFocus
+                          className="input"
+                          style={{ flex: 1, fontSize: 11, padding: "3px 6px" }}
+                          value={nickInput}
+                          onChange={e => setNickInput(e.target.value)}
+                          onKeyDown={e => e.key === "Enter" && handleNickChange()}
+                          placeholder="Новый ник…"
+                        />
+                        <button className="btn btn-primary" style={{ fontSize: 10, padding: "3px 8px" }} onClick={handleNickChange}>✓</button>
+                        <button className="btn" style={{ fontSize: 10, padding: "3px 8px" }} onClick={() => setShowNick(false)}>✕</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn" style={{ flex: 1, fontSize: 10, padding: "3px 6px" }} onClick={() => setShowNick(true)}>✏️ Ник</button>
+                        <button className="btn" style={{ fontSize: 10, padding: "3px 6px" }} onClick={() => setEditOpen(true)}>⚙️</button>
+                        <button className="btn btn-danger" style={{ fontSize: 10, padding: "3px 6px" }} onClick={handleDelete}>🗑️</button>
+                      </>
+                    )}
                   </div>
-                  <BotControls bot={selectedBot} />
+
+                  {/* AnkaRecorder */}
+                  <div className="panel" style={{ overflow: "hidden" }}>
+                    <AnkaRecorder bot={selectedBot} />
+                  </div>
                 </>
               ) : (
-                <div className="text-xs text-center mt-8" style={{ color: "#555" }}>
+                <div style={{ textAlign: "center", color: "#1e2a3a", marginTop: 32, fontSize: 11 }}>
                   Создайте или выберите бота
                 </div>
               )}
@@ -68,7 +85,7 @@ export default function LeftPanel() {
     <>
       <div
         className="panel flex-shrink-0"
-        style={{ width: 290, overflow: "hidden", display: "flex", flexDirection: "column" }}
+        style={{ width: 280, overflow: "hidden", display: "flex", flexDirection: "column" }}
       >
         {content()}
       </div>
