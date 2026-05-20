@@ -319,12 +319,29 @@ class BotManager {
     // Throttle: обновляем координаты не чаще 1 раза в 2 секунды
     // (physicsTick = 20 раз/сек, прямая отправка IPC перегружает канал)
     let _tickCounter = 0;
+    let _eatCooldown = 0;
+    let _isEating = false;
     bot.on("physicsTick", () => {
       _tickCounter++;
       if (_tickCounter % 40 === 0 && bot.entity) {
         instance.stats.x = Math.round(bot.entity.position.x);
         instance.stats.y = Math.round(bot.entity.position.y);
         instance.stats.z = Math.round(bot.entity.position.z);
+      }
+      // ── Авто-еда: кушаем когда голод < 16/20 (раз в ~5 сек) ──────
+      _eatCooldown++;
+      if (_eatCooldown >= 100 && !_isEating && bot.entity && bot.food != null && bot.food < 16) {
+        _eatCooldown = 0;
+        const foodItem = bot.inventory.items()
+          .filter(i => i.foodPoints && i.foodPoints > 0)
+          .sort((a, b) => (b.foodPoints || 0) - (a.foodPoints || 0))[0];
+        if (foodItem) {
+          _isEating = true;
+          bot.equip(foodItem, "hand")
+            .then(() => bot.consume())
+            .catch(() => {})
+            .finally(() => { _isEating = false; });
+        }
       }
     });
 
