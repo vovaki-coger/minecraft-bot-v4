@@ -11,6 +11,7 @@ export default function BotTabs() {
     { id: "models",      label: "Модели ИИ",     color: "#9d60ff" },
     { id: "anarchy",     label: "⚓ Анархия",    color: "#ff2255" },
     { id: "coordinator", label: "Координатор",    color: "#00c8ff" },
+    { id: "farm",        label: "🌲 Ферма",       color: "#7ecc49" },
     { id: "settings",    label: "Настройки",     color: "#ff8800" },
   ] as const;
 

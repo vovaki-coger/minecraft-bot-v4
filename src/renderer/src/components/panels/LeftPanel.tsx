@@ -5,6 +5,7 @@ import ModelsTab from "../tabs/ModelsTab";
 import SettingsTab from "../tabs/SettingsTab";
 import CoordinatorTab from "../tabs/CoordinatorTab";
 import AnarchyTab from "../tabs/AnarchyTab";
+import FarmTab from "../tabs/FarmTab";
 import BotEditModal from "../BotEditModal";
 
 export default function LeftPanel() {
@@ -31,6 +32,7 @@ export default function LeftPanel() {
       case "settings":    return <SettingsTab />;
       case "coordinator": return <CoordinatorTab />;
       case "anarchy":     return <AnarchyTab />;
+      case "farm":        return <FarmTab />;
       default:
         return (
           <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>

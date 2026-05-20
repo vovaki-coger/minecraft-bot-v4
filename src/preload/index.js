@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     startAnarchy: (id, opts) => ipcRenderer.invoke("bot:startAnarchy", id, opts),
     stopAnarchy: (id) => ipcRenderer.invoke("bot:stopAnarchy", id),
     getAnarchyState: (id) => ipcRenderer.invoke("bot:getAnarchyState", id),
+    runTask: (id, task, args) => ipcRenderer.invoke("bot:runTask", id, task, args),
+    stopTask: (id) => ipcRenderer.invoke("bot:stopTask", id),
   },
   anka: {
     list: () => ipcRenderer.invoke("anka:list"),
@@ -72,6 +74,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "bot:survivorStarted", "bot:survivorStopped", "bot:survivorLog",
       "bot:aiToggled", "bot:windowOpen", "bot:windowClose", "bot:modelDetected",
       "bot:anarchyStarted", "bot:anarchyStopped", "bot:anarchyPhase", "bot:anarchyLog",
+      "bot:taskStarted", "bot:taskStopped", "bot:taskLog",
       "ollama:pullProgress",
       "coordinator:statusUpdate", "coordinator:taskAssigned", "coordinator:groupChat",
     ];
