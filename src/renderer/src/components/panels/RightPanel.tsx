@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { BotState, ChatMessage } from "../../store/appStore";
 
 interface Props {
@@ -13,16 +13,27 @@ export default function RightPanel({ bot }: Props) {
   const [activeTab, setActiveTab] = useState<ChatTab>("minecraft");
   const [autoResponse, setAutoResponse] = useState(false);
   const [lobbyLoading, setLobbyLoading] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const aiChatEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const aiChatContainerRef = useRef<HTMLDivElement>(null);
+
+  // Scroll only the chat container, NOT the whole viewport
+  const scrollToBottom = useCallback((ref: React.RefObject<HTMLDivElement | null>) => {
+    const el = ref.current;
+    if (!el) return;
+    // Only auto-scroll if user is already near the bottom (within 80px)
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (isNearBottom) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [bot?.chatHistory]);
+    scrollToBottom(chatContainerRef);
+  }, [bot?.chatHistory, scrollToBottom]);
 
   useEffect(() => {
-    aiChatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [bot?.aiChatHistory]);
+    scrollToBottom(aiChatContainerRef);
+  }, [bot?.aiChatHistory, scrollToBottom]);
 
   useEffect(() => {
     if (bot) {
@@ -160,6 +171,7 @@ export default function RightPanel({ bot }: Props) {
           </div>
 
           <div
+            ref={chatContainerRef}
             className="flex-1 overflow-y-auto p-2"
             style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5 }}
           >
@@ -175,7 +187,6 @@ export default function RightPanel({ bot }: Props) {
                 </div>
               ))
             )}
-            <div ref={chatEndRef} />
           </div>
 
           <div className="p-2 border-t" style={{ borderColor: "#3a3a3a" }}>
@@ -210,6 +221,7 @@ export default function RightPanel({ bot }: Props) {
           </div>
 
           <div
+            ref={aiChatContainerRef}
             className="flex-1 overflow-y-auto p-2"
             style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5 }}
           >
@@ -233,7 +245,6 @@ export default function RightPanel({ bot }: Props) {
                 </div>
               ))
             )}
-            <div ref={aiChatEndRef} />
           </div>
 
           <div className="p-2 border-t" style={{ borderColor: "#3a3a3a" }}>

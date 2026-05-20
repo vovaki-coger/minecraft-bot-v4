@@ -248,13 +248,48 @@ class BotManager {
         log.info("[BotManager] AIBrain started for bot", botId);
       }
 
+      // ── АНТИ-ЧИТ ОБХОД: настройка движения по стилю Baritone/Biblioran ──
+      // Ограничиваем скорость физики до уровня ванильного клиента
+      try {
+        // Vanilla walk: 0.21585 blocks/tick, sprint: 0.2806 blocks/tick
+        // Занижаем немного чтобы гарантированно не триггерить speed-чек
+        if (bot.physics) {
+          bot.physics.walkSpeed   = 0.13;   // ниже ванильного 0.21585
+          bot.physics.sprintSpeed = 0.13;   // полностью убираем спринт на уровне физики
+          bot.physics.stepHeight  = 0.6;    // стандартный vanilla step
+        }
+      } catch(e) { log.warn("[AC] Physics patch failed:", e.message); }
+
       const movements = new Movements(bot);
-      // Отключаем спринт — основная причина "Invalid move player packet"
-      // на серверах с анти-читом (бот двигается быстрее допустимого)
-      movements.allowSprinting = false;
-      movements.canDig = true;
-      movements.allow1by1towers = false; // Убираем прыжки-башни (тоже детектируются)
+      movements.allowSprinting   = false;  // без спринта
+      movements.canDig           = true;
+      movements.allow1by1towers  = false;  // убираем башни (детектируются как scaffold)
+      movements.allowParkour     = false;  // паркур — частая причина "moved wrongly"
+      movements.allowFreeMotion  = false;  // без свободного движения
+      movements.maxDropDown      = 3;      // не прыгаем с высоты > 3 (детектируется fly)
+      movements.canOpenDoors     = true;
       bot.pathfinder.setMovements(movements);
+
+      // ── Ограничиваем частоту пакетов позиции чтобы не триггерить rate-чек ──
+      // Перехватываем _client.write и добавляем минимальный интервал между position-пакетами
+      {
+        const MIN_POS_INTERVAL = 55; // ms, чуть больше ванильных 50ms (один тик)
+        let _lastPosSent = 0;
+        const _origWrite = bot._client.write.bind(bot._client);
+        bot._client.write = function(name, params) {
+          if (name === "position" || name === "position_look" || name === "look") {
+            const now = Date.now();
+            // Пропускаем пакет если слишком рано — он будет послан на следующем тике
+            if (now - _lastPosSent < MIN_POS_INTERVAL) return;
+            _lastPosSent = now;
+          }
+          return _origWrite(name, params);
+        };
+        // Очищаем перехват когда бот отключается
+        bot.once("end", () => {
+          try { bot._client.write = _origWrite; } catch {}
+        });
+      }
 
       
       // ── Самооборона ──────────────────────────────────────────────────
