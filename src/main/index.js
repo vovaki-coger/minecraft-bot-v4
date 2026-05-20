@@ -120,6 +120,14 @@ function setupIpcHandlers() {
     botManager.updateBotConfig(botId, config)
   );
   ipcMain.handle("bot:testProxy", (_e, proxy) => botManager.testProxy(proxy));
+
+  ipcMain.handle("bot:runTask", (_e, botId, taskName, args) =>
+    botManager.runBotTask(botId, taskName, args)
+  );
+  ipcMain.handle("bot:stopTask", (_e, botId) =>
+    botManager.stopBotTask(botId)
+  );
+
   ipcMain.handle("bot:triggerLobby", (_e, botId) => botManager.triggerLobbyRank(botId));
 
   ipcMain.handle("proxy:check", (_e, proxy) => botManager.testProxy(proxy));
