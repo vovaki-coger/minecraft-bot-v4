@@ -109,7 +109,9 @@ class AnarchyProtocol {
         this._addLog(`✅ Цикл ${this._cycleCount} завершён. Возобновляю задачу...`);
       } catch (err) {
         log.error("[Anarchy] Loop error:", err.message);
-        this._addLog(`⚠️ Ошибка: ${err.message}. Продолжаю...`);
+        this._addLog("⚠️ Ошибка: " + err.message.slice(0, 80) + ". Продолжаю через 5с...");
+        try { if (this.instance.bot) this.instance.bot.clearControlStates(); } catch {}
+        try { if (this.instance.bot?.pathfinder) this.instance.bot.pathfinder.stop(); } catch {}
         await sleep(5000);
       }
     }
@@ -318,16 +320,40 @@ class AnarchyProtocol {
 
   _parseAnarchyTask(task) {
     const t = task.toLowerCase();
+    const num = t.match(/(\d+)/);
+    const n = num ? parseInt(num[1]) : 0;
+
+    // ферма деревьев
+    if (/ферм.{0,8}дерев|дерево.{0,8}ферм|farm.{0,8}tree|tree.{0,8}farm|сажай дерев/.test(t)) {
+      const cropM = t.match(/(дуб|берёз|берез|ель|акаци|oak|birch|spruce|jungle|acacia|dark_oak)/);
+      const cropMap = { дуб:'oak',oak:'oak',берёз:'birch',берез:'birch',birch:'birch',ель:'spruce',spruce:'spruce',jungle:'jungle',акаци:'acacia',acacia:'acacia',dark_oak:'dark_oak' };
+      const crop = cropM ? (cropMap[cropM[1]] || 'oak') : 'oak';
+      return { name: "farm_trees", args: { radius: n || 30, crop } };
+    }
+    // ферма культур
+    if (/ферм.{0,8}культ|ферм.{0,8}пшениц|ферм.{0,8}морков|farm.{0,8}crop|посадить (пшеница|морковь|картошка)/.test(t)) {
+      const cropM = t.match(/(пшениц|wheat|морков|carrot|картош|potato|свёкл|beetroot|дын|melon|тыкв|pumpkin|нетер|nether)/);
+      const cropMap = { пшениц:'wheat',wheat:'wheat',морков:'carrot',carrot:'carrot',картош:'potato',potato:'potato','свёкл':'beetroot',beetroot:'beetroot',дын:'melon',melon:'melon',тыкв:'pumpkin',pumpkin:'pumpkin',нетер:'nether_wart',nether:'nether_wart' };
+      const crop = cropM ? (cropMap[cropM[1]] || 'wheat') : 'wheat';
+      return { name: "farm_crops", args: { radius: n || 20, crop } };
+    }
+    // рубить дерево
     if (/руби|рубить|дерев|wood|log/.test(t)) {
-      const m = t.match(/(\d+)/);
-      return { name: "gather_wood", args: { count: m ? parseInt(m[1]) : 32 } };
+      return { name: "gather_wood", args: { count: n || 32 } };
     }
+    // камень
     if (/камень|cobble|stone/.test(t)) {
-      const m = t.match(/(\d+)/);
-      return { name: "gather_stone", args: { count: m ? parseInt(m[1]) : 64 } };
+      return { name: "gather_stone", args: { count: n || 64 } };
     }
+    // еда
     if (/еда|охот|корова|свинья|food|hunt/.test(t)) return { name: "gather_food", args: {} };
+    // исследование
     if (/исследу|explore|гуля/.test(t)) return { name: "explore", args: {} };
+    // атака
+    if (/атак|убей|kill|attack|pvp/.test(t)) {
+      const targetM = t.match(/(?:атак|убей|kill|attack)s+(S+)/);
+      return { name: "pvp_attack", args: { target: targetM?.[1] || "" } };
+    }
     return null;
   }
 
