@@ -1,8 +1,56 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, Component } from "react";
 import { useAppStore } from "./store/appStore";
 import MainLayout from "./components/MainLayout";
 import OllamaSetup from "./components/OllamaSetup";
 import LoadingScreen from "./components/LoadingScreen";
+
+class ErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error("[ErrorBoundary] React crash caught:", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{
+          flex: 1, display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", gap: 12,
+          background: "#060810", color: "#ff4466", fontFamily: "monospace",
+          padding: 32,
+        }}>
+          <div style={{ fontSize: 32 }}>⚠️</div>
+          <div style={{ fontSize: 14, fontWeight: "bold" }}>Ошибка интерфейса</div>
+          <div style={{ fontSize: 11, color: "#2a3a5a", maxWidth: 400, textAlign: "center", wordBreak: "break-word" }}>
+            {this.state.error.message}
+          </div>
+          <button
+            style={{
+              marginTop: 8, padding: "6px 18px", background: "none",
+              border: "1px solid #ff4466", borderRadius: 4,
+              color: "#ff4466", cursor: "pointer", fontFamily: "monospace", fontSize: 12,
+            }}
+            onClick={() => this.setState({ error: null })}
+          >
+            Восстановить
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const { ollamaStatus, setOllamaStatus, loadBots, loadConfig } = useAppStore();
@@ -45,5 +93,9 @@ export default function App() {
 
   if (loading) return <LoadingScreen />;
   if (needsSetup && !ollamaStatus?.running) return <OllamaSetup onComplete={() => setNeedsSetup(false)} />;
-  return <MainLayout />;
+  return (
+    <ErrorBoundary>
+      <MainLayout />
+    </ErrorBoundary>
+  );
 }

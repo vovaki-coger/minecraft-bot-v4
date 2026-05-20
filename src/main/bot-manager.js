@@ -479,25 +479,32 @@ class BotManager {
         log.info(`[BotManager] windowOpen: "${win?.title}" slots=${win?.slots?.length} invStart=${win?.inventoryStart}`);
         emitWindowSlots(win);
 
-        // Серверы присылают предметы чуть позже — переотправляем через 500 мс
+        // Дебаунс: собираем все updateSlot за 80ms и шлём один раз
+        let slotDebounceTimer = null;
+        const debouncedEmit = () => {
+          if (slotDebounceTimer) clearTimeout(slotDebounceTimer);
+          slotDebounceTimer = setTimeout(() => {
+            slotDebounceTimer = null;
+            try {
+              if (bot.currentWindow === win) emitWindowSlots(win);
+            } catch (e) {
+              log.warn(`[BotManager] debounced emit error: ${e.message}`);
+            }
+          }, 80);
+        };
+
+        // Первая отправка через 150ms — к этому моменту сервер уже прислал предметы
         setTimeout(() => {
           try {
             if (bot.currentWindow === win) emitWindowSlots(win);
           } catch (e) {
-            log.warn(`[BotManager] windowOpen retry error: ${e.message}`);
+            log.warn(`[BotManager] windowOpen initial emit error: ${e.message}`);
           }
-        }, 500);
+        }, 150);
 
-        // Подписываемся на обновление отдельных слотов
+        // Подписываемся на обновление отдельных слотов (с дебаунсом)
         if (win && typeof win.on === "function") {
-          const slotHandler = () => {
-            try {
-              if (bot.currentWindow === win) emitWindowSlots(win);
-            } catch (e) {
-              log.warn(`[BotManager] updateSlot handler error: ${e.message}`);
-            }
-          };
-          win.on("updateSlot", slotHandler);
+          win.on("updateSlot", debouncedEmit);
         }
       } catch (err) {
         log.error(`[BotManager] windowOpen handler crashed: ${err.message}`);
