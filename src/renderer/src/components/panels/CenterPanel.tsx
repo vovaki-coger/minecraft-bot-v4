@@ -335,22 +335,15 @@ export default function CenterPanel({ bot }: { bot: BotState | null }) {
           </div>
         </div>
 
-        {/* Combined inventory */}
-        <div style={{ background: "rgba(0,0,0,.3)", border: "1px solid #1a2040", borderRadius: 5, overflow: "hidden" }}>
-          <div style={{ padding: "5px 10px", borderBottom: "1px solid #1a2040", display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ color: "#00c8ff", fontSize: 11, fontFamily: "monospace" }}>🎒 ИНВЕНТАРЬ</span>
-            {isOnline && (
-              <span style={{ marginLeft: "auto", fontSize: 9, color: "#2a3a5a" }}>
-                <span style={{ background: "rgba(0,255,157,.06)", border: "1px solid rgba(0,255,157,.15)", borderRadius: 2, padding: "1px 4px", color: "#00ff9d55", marginRight: 4 }}>ЛКМ</span>
-                <span style={{ background: "rgba(255,170,0,.06)", border: "1px solid rgba(255,170,0,.15)", borderRadius: 2, padding: "1px 4px", color: "#ffaa0055" }}>ПКМ</span>
+        {/* Chest/window slots — выше инвентаря */}
+        {currentWindow && (
+          <div style={{ background: "rgba(0,0,0,.3)", border: "1px solid #2a4060", borderRadius: 5, overflow: "hidden" }}>
+            <div style={{ padding: "5px 10px", borderBottom: "1px solid #1a2040", background: "rgba(0,200,255,.03)" }}>
+              <span style={{ color: "#00c8ff", fontSize: 11, fontFamily: "monospace" }}>
+                📦 {winTitle || "Сундук / Меню"}
               </span>
-            )}
-          </div>
-
-          {/* Chest/window slots */}
-          {currentWindow && (
-            <div style={{ padding: "8px 10px", borderBottom: "1px solid #1a2040", background: "rgba(0,200,255,.015)" }}>
-              <div style={{ color: "#3a5060", fontSize: 10, marginBottom: 5 }}>📦 {winTitle || "Сундук / Меню"}</div>
+            </div>
+            <div style={{ padding: "8px 10px" }}>
               {chestGrid.length > 0 ? (
                 <div style={{ overflowX: "auto" }}>
                   <div style={{ display: "grid", gridTemplateColumns: `repeat(9, ${SLOT_SZ}px)`, gap: 2, width: "fit-content" }}>
@@ -364,12 +357,25 @@ export default function CenterPanel({ bot }: { bot: BotState | null }) {
                   </div>
                 </div>
               ) : (
-                <div style={{ color: "#1e3a50", fontSize: 11, padding: "10px 0", fontFamily: "monospace" }}>
+                <div style={{ color: "#1e3a50", fontSize: 11, padding: "6px 0", fontFamily: "monospace" }}>
                   ⏳ Загрузка содержимого…
                 </div>
               )}
             </div>
-          )}
+          </div>
+        )}
+
+        {/* Combined inventory */}
+        <div style={{ background: "rgba(0,0,0,.3)", border: "1px solid #1a2040", borderRadius: 5, overflow: "hidden" }}>
+          <div style={{ padding: "5px 10px", borderBottom: "1px solid #1a2040", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: "#00c8ff", fontSize: 11, fontFamily: "monospace" }}>🎒 ИНВЕНТАРЬ</span>
+            {isOnline && (
+              <span style={{ marginLeft: "auto", fontSize: 9, color: "#2a3a5a" }}>
+                <span style={{ background: "rgba(0,255,157,.06)", border: "1px solid rgba(0,255,157,.15)", borderRadius: 2, padding: "1px 4px", color: "#00ff9d55", marginRight: 4 }}>ЛКМ</span>
+                <span style={{ background: "rgba(255,170,0,.06)", border: "1px solid rgba(255,170,0,.15)", borderRadius: 2, padding: "1px 4px", color: "#ffaa0055" }}>ПКМ</span>
+              </span>
+            )}
+          </div>
 
           {/* Bot inventory */}
           <div style={{ padding: "8px 10px" }}>

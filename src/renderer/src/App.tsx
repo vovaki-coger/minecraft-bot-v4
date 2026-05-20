@@ -22,33 +22,35 @@ class ErrorBoundary extends Component<
   }
 
   render() {
-    if (this.state.error) {
-      return (
-        <div style={{
-          flex: 1, display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "center", gap: 12,
-          background: "#060810", color: "#ff4466", fontFamily: "monospace",
-          padding: 32,
-        }}>
-          <div style={{ fontSize: 32 }}>⚠️</div>
-          <div style={{ fontSize: 14, fontWeight: "bold" }}>Ошибка интерфейса</div>
-          <div style={{ fontSize: 11, color: "#2a3a5a", maxWidth: 400, textAlign: "center", wordBreak: "break-word" }}>
-            {this.state.error.message}
+    const { error } = this.state;
+    return (
+      <div style={{ position: "relative", display: "flex", flex: 1, overflow: "hidden" }}>
+        {this.props.children}
+        {error && (
+          <div style={{
+            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999,
+            background: "rgba(20,6,8,.97)", borderTop: "1px solid #ff3344",
+            padding: "6px 14px", display: "flex", alignItems: "center", gap: 10,
+            fontFamily: "monospace", fontSize: 11,
+          }}>
+            <span style={{ color: "#ff4466" }}>⚠</span>
+            <span style={{ color: "#ff6677", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {error.message}
+            </span>
+            <button
+              style={{
+                padding: "2px 10px", background: "none", border: "1px solid #ff3344",
+                borderRadius: 3, color: "#ff4466", cursor: "pointer",
+                fontFamily: "monospace", fontSize: 11, flexShrink: 0,
+              }}
+              onClick={() => this.setState({ error: null })}
+            >
+              ✕
+            </button>
           </div>
-          <button
-            style={{
-              marginTop: 8, padding: "6px 18px", background: "none",
-              border: "1px solid #ff4466", borderRadius: 4,
-              color: "#ff4466", cursor: "pointer", fontFamily: "monospace", fontSize: 12,
-            }}
-            onClick={() => this.setState({ error: null })}
-          >
-            Восстановить
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
+        )}
+      </div>
+    );
   }
 }
 

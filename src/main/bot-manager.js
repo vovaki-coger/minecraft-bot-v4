@@ -32,8 +32,16 @@ const RUSSIAN_OVERRIDE = `ВАЖНО: Ты общаешься НА РУССКО�
 function nbtToStr(v) {
   if (v == null) return "";
   if (typeof v === "string") return v;
-  if (typeof v === "object" && "value" in v) return nbtToStr(v.value);
-  return String(v);
+  if (typeof v !== "object") return String(v);
+  // NBT tag: {type:"string", value:"..."} or {value: ...}
+  if ("value" in v) return nbtToStr(v.value);
+  // JSON text component: {text:"..."} or {translate:"..."}
+  if ("text" in v) return String(v.text || "");
+  if ("translate" in v) return String(v.translate || "");
+  // extra/with arrays (chat components)
+  if (Array.isArray(v.extra)) return v.extra.map(nbtToStr).join("");
+  // Fallback — never return an object
+  return "";
 }
 function nbtToNum(v) {
   if (v == null) return 0;
@@ -428,20 +436,25 @@ class BotManager {
 
     // ── Окна инвентаря (для рекордера анки) ───────────────────────────────
     const parseWindowTitle = (raw) => {
+      const extractText = (node) => {
+        if (!node) return "";
+        if (typeof node === "string") return node;
+        let text = String(node.text || node.translate || "");
+        if (Array.isArray(node.extra)) text += node.extra.map(extractText).join("");
+        if (Array.isArray(node.with)) text += node.with.map(extractText).join(" ");
+        return text;
+      };
       try {
+        // win.title может уже быть объектом (mineflayer распарсил JSON сам)
+        if (raw != null && typeof raw === "object") {
+          return extractText(raw).trim() || "";
+        }
+        if (!raw) return "";
         const p = JSON.parse(raw);
-        // Собираем текст из extra-массива (стиль Minecraft JSON-компонента)
-        const extractText = (node) => {
-          if (!node) return "";
-          let text = node.text || node.translate || "";
-          if (Array.isArray(node.extra)) text += node.extra.map(extractText).join("");
-          if (Array.isArray(node.with)) text += node.with.map(extractText).join(" ");
-          return text;
-        };
-        const result = extractText(p);
-        return result.trim() || raw;
+        return extractText(p).trim() || String(raw);
       } catch {
-        return raw;
+        // Если не JSON — вернуть как строку (никогда объект)
+        return raw != null ? String(raw) : "";
       }
     };
 
