@@ -254,24 +254,37 @@ class BotManager {
       bot.on('health', () => {
         if (!bot.entity) return;
         const newHealth = bot.health || 20;
+
+        // Авто-еда при низком здоровье (< 14/20)
+        if (newHealth < 14 && bot.food < 18) {
+          const foodItem = bot.inventory.items()
+            .filter(i => i.foodPoints && i.foodPoints > 0)
+            .sort((a, b) => (b.foodPoints || 0) - (a.foodPoints || 0))[0];
+          if (foodItem) {
+            bot.equip(foodItem, "hand").then(() => bot.consume().catch(() => {})).catch(() => {});
+          }
+        }
+
         if (newHealth < prevHealth && instance.config.selfDefense !== false) {
+          // Ищем атакующего среди ВСЕХ сущностей (игроки + мобы)
           let attacker = null, minDist = 7;
           for (const e of Object.values(bot.entities)) {
             if (!e.position || e === bot.entity) continue;
             const isPlayer = e.type === 'player' || (e.username && e.username !== bot.username);
-            if (!isPlayer) continue;
+            const isMob = e.type === 'mob' || e.type === 'hostile';
+            if (!isPlayer && !isMob) continue;
             const dist = bot.entity.position.distanceTo(e.position);
             if (dist < minDist) { minDist = dist; attacker = e; }
           }
           if (attacker?.isValid) {
             try { bot.lookAt(attacker.position.offset(0, (attacker.height||1.8)*0.85, 0)); } catch {}
-            this.emit("bot:alert", { botId, type: "attacked", title: "⚔️ Бот атакован!", message: "Ник: " + instance.config.nick + " | Атакует: " + (attacker.username||attacker.name||"моб") });
+            this.emit("bot:alert", { botId, type: "attacked", title: "⚔️ Бот атакован!", message: "Ник: " + instance.config.nick + " | Атакует: " + (attacker.username||attacker.displayName||attacker.name||"моб") });
             // Автооборона: преследуем и атакуем несколько тиков
             const runDefense = () => {
               let ticks = 0;
               const iv = setInterval(() => {
                 ticks++;
-                if (ticks > 10 || !attacker?.isValid || !bot?.entity) { clearInterval(iv); return; }
+                if (ticks > 15 || !attacker?.isValid || !bot?.entity) { clearInterval(iv); return; }
                 try {
                   bot.lookAt(attacker.position.offset(0, (attacker.height||1.8)*0.85, 0));
                   if (bot.pvp) bot.pvp.attack(attacker);
