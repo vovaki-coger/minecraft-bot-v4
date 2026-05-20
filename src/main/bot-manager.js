@@ -265,8 +265,21 @@ class BotManager {
           }
           if (attacker?.isValid) {
             try { bot.lookAt(attacker.position.offset(0, (attacker.height||1.8)*0.85, 0)); } catch {}
-            if (bot.pvp) bot.pvp.attack(attacker);
-            else setTimeout(() => { try { bot.attack(attacker); } catch {} }, 100);
+            this.emit("bot:alert", { botId, type: "attacked", title: "⚔️ Бот атакован!", message: "Ник: " + instance.config.nick + " | Атакует: " + (attacker.username||attacker.name||"моб") });
+            // Автооборона: преследуем и атакуем несколько тиков
+            const runDefense = () => {
+              let ticks = 0;
+              const iv = setInterval(() => {
+                ticks++;
+                if (ticks > 10 || !attacker?.isValid || !bot?.entity) { clearInterval(iv); return; }
+                try {
+                  bot.lookAt(attacker.position.offset(0, (attacker.height||1.8)*0.85, 0));
+                  if (bot.pvp) bot.pvp.attack(attacker);
+                  else bot.attack(attacker);
+                } catch { clearInterval(iv); }
+              }, 400);
+            };
+            runDefense();
           }
         }
         prevHealth = newHealth;
@@ -347,8 +360,9 @@ class BotManager {
     });
 
     bot.on("death", () => {
-      this._addChat(instance, "system", "💀 Бот умер");
-      this.emit("bot:death", { botId });
+      this._addChat(instance, "system", "💀 Бот умер! Позиция: " + Math.round(instance.stats?.x||0) + " " + Math.round(instance.stats?.y||0) + " " + Math.round(instance.stats?.z||0));
+      this.emit("bot:death", { botId, nick: instance.config.nick, pos: instance.stats, timestamp: Date.now() });
+      this.emit("bot:alert", { botId, type: "death", title: "💀 Бот умер!", message: "Ник: " + instance.config.nick + " | Сервер: " + instance.config.host, nick: instance.config.nick });
       instance.survivorAI?.onDeath();
     });
 
