@@ -249,117 +249,142 @@ class BotManager {
       }
 
       // ══════════════════════════════════════════════════════════════════
-      // АНТИ-ЧИТ ОБХОД v2 — техники Baritone + Biblioran
-      // Baritone (github.com/cabaletta/baritone) обходит анти-чит через:
-      //  1. Строгое соблюдение vanilla speed limits (нет спринта, нет fly)
-      //  2. Плавные повороты — не мгновенный snap, а lerp по тикам
-      //  3. Пакеты позиции ровно раз в тик (50 ms) — не чаще, не реже
-      //  4. Наземная проверка перед горизонтальным движением
-      //  5. Микро-джиттер позиции чтобы не выглядеть как бот
+      // АНТИ-ЧИТ: packet-level physics validation
+      //
+      // Архитектура mineflayer physics loop (каждые 50 ms):
+      //   1. control states → acceleration
+      //   2. gravity + drag → velocity update
+      //   3. collision resolution → position update
+      //   4. «physicsTick» event fires           ← МЫ ВМЕШИВАЕМСЯ ЗДЕСЬ
+      //   5. position/position_look packet sent   ← пакет уже корректный
+      //
+      // Правило: не дропаем и не задерживаем пакеты — мы клампим velocity
+      // ДО отправки, поэтому сервер получает физически возможную позицию.
+      //
+      // Vanilla constants (1.20.x):
+      //   walk  = 0.21585 bpt   sprint = 0.2806 bpt
+      //   jump  = 0.42 bpt      gravity = 0.08 bpt²
+      //   termV = 3.92 bpt (downward)
+      //   airDrag = 0.98        groundFriction = 0.546 (0.91 * 0.6)
       // ══════════════════════════════════════════════════════════════════
 
-      // ── 1. Ограничиваем физику до vanilla walk ──────────────────────
-      try {
-        if (bot.physics) {
-          // Vanilla walk = 0.21585 bpt, sprint = 0.2806 bpt
-          // Ставим чуть ниже — гарантия против speed-чека
-          bot.physics.walkSpeed      = 0.15;
-          bot.physics.sprintSpeed    = 0.15;
-          bot.physics.stepHeight     = 0.6;   // vanilla step
-          bot.physics.gravity        = 0.08;  // точно vanilla (дефолт и так 0.08)
-          bot.physics.airdrag        = 0.98;
-          bot.physics.groundFriction = 0.6;
-        }
-      } catch(e) { log.warn("[AC] Physics patch failed:", e.message); }
-
-      // ── 2. Pathfinder — запрещаем все "нечеловеческие" движения ─────
+      // ── 1. Pathfinder: только physically-valid moves ─────────────────
       const movements = new Movements(bot);
-      movements.allowSprinting   = false; // спринт триггерит speed-чек
+      movements.allowSprinting   = false;
       movements.canDig           = true;
-      movements.allow1by1towers  = false; // scaffold детектируется
-      movements.allowParkour     = false; // parkour → "moved wrongly"
+      movements.allow1by1towers  = false;
+      movements.allowParkour     = false;
       movements.allowFreeMotion  = false;
-      movements.maxDropDown      = 3;     // drop > 3 → fly/jump-чек
+      movements.maxDropDown      = 3;
       movements.canOpenDoors     = true;
       bot.pathfinder.setMovements(movements);
 
-      // ── 3. Контроль скорости через physicsTick (без перехвата пакетов) ─
-      // ВАЖНО: перехват _client.write с дропом пакетов — НЕПРАВИЛЬНЫЙ подход.
-      // Если мы пропускаем промежуточный position-пакет, сервер видит что бот
-      // переместился за 1 тик на расстояние 3 тиков → "moved too fast" кик.
-      // Правильно: mineflayer сам отправляет ровно 1 пакет в тик (50ms)
-      // через physics loop — не надо перехватывать, надо контролировать СКОРОСТЬ.
-      //
-      // Контролируем скорость через setControlState: если бот движется быстрее
-      // допустимого — обнуляем forward/sprint на этот тик.
+      // ── 2. physics settings — точно vanilla ─────────────────────────
+      try {
+        if (bot.physics) {
+          bot.physics.gravity        = 0.08;
+          bot.physics.airdrag        = 0.98;
+          bot.physics.groundFriction = 0.6;
+          bot.physics.stepHeight     = 0.6;
+          // НЕ меняем walkSpeed/sprintSpeed — это multiplier внутри движка,
+          // физически некорректно выставлять их ниже vanilla; вместо этого
+          // клампим итоговый velocity в physicsTick
+        }
+      } catch(e) { log.warn("[AC] physics settings:", e.message); }
+
+      // ── 3. physicsTick velocity clamp ───────────────────────────────
+      // Срабатывает ПОСЛЕ вычисления физики, ДО отправки пакета позиции.
+      // Клампим horizontal velocity до vanilla walk limit.
+      // Это гарантирует что position-пакет содержит физически возможное значение.
       {
-        const MAX_SPEED_PER_TICK = 0.18; // блоков/тик, чуть ниже vanilla walk 0.21585
-        let _prevPos = null;
-        const _speedWatcherId = bot.on('physicsTick', () => {
+        const WALK_MAX  = 0.215;  // чуть ниже vanilla 0.21585 — запас на float
+        const TERM_VEL  = 3.92;   // terminal velocity (вниз)
+
+        // Запоминаем последнюю подтверждённую сервером позицию
+        // (сервер шлёт position_and_look когда он корректирует нас)
+        let _serverPos = null;
+        bot.on('forcedMove', () => {
+          if (bot.entity) _serverPos = bot.entity.position.clone();
+        });
+
+        const _tickHandler = () => {
           if (!bot.entity) return;
-          const pos = bot.entity.position;
-          if (_prevPos) {
-            const dx = pos.x - _prevPos.x;
-            const dz = pos.z - _prevPos.z;
-            const speed = Math.sqrt(dx*dx + dz*dz);
-            if (speed > MAX_SPEED_PER_TICK) {
-              // Бот движется слишком быстро — тормозим на этот тик
-              bot.setControlState('sprint', false);
-            }
+          const vel = bot.entity.velocity;
+
+          // Горизонтальный кламп
+          const hSq = vel.x * vel.x + vel.z * vel.z;
+          if (hSq > WALK_MAX * WALK_MAX) {
+            const scale = WALK_MAX / Math.sqrt(hSq);
+            vel.x *= scale;
+            vel.z *= scale;
           }
-          _prevPos = pos.clone();
-        });
-        bot.once("end", () => {
-          try { bot.removeListener('physicsTick', _speedWatcherId); } catch {}
-        });
+
+          // Вертикальный кламп (terminal velocity)
+          if (vel.y < -TERM_VEL) vel.y = -TERM_VEL;
+        };
+
+        bot.on('physicsTick', _tickHandler);
+        bot.once('end', () => { try { bot.removeListener('physicsTick', _tickHandler); } catch {} });
       }
 
-      // ── 4. Плавные повороты головы (Baritone rotation lerp) ─────────
-      // Baritone не делает мгновенный lookAt — он плавно поворачивает голову
-      // по 15-25° за тик. Мгновенные 180° повороты — верный признак бота.
+      // ── 4. Packet-level onGround correction ─────────────────────────
+      // Один из самых частых банов: onGround=true когда бот в воздухе.
+      // Перехватываем write, но НЕ дропаем — только исправляем флаг.
+      {
+        const _origWrite = bot._client.write.bind(bot._client);
+        bot._client.write = function(name, params) {
+          if ((name === 'position' || name === 'position_look') && params && bot.entity) {
+            // Проверяем есть ли твёрдый блок под ногами (в пределах 0.05 блока)
+            try {
+              const below = bot.blockAt(bot.entity.position.offset(0, -0.1, 0));
+              const actualOnGround = below && below.boundingBox === 'block'
+                ? bot.entity.position.y - Math.floor(bot.entity.position.y) < 0.05
+                : false;
+              // Если физика говорит onGround но блока нет — исправляем
+              if (params.onGround && !actualOnGround && bot.entity.velocity.y < -0.1) {
+                params = { ...params, onGround: false };
+              }
+            } catch {}
+          }
+          return _origWrite(name, params);
+        };
+        bot.once('end', () => { try { bot._client.write = _origWrite; } catch {} });
+      }
+
+      // ── 5. Плавные повороты головы ───────────────────────────────────
+      // Мгновенный поворот на 180° — детектируется любым анти-читом.
+      // Lerp по 25°/тик = максимум быстрого живого игрока.
       {
         const _origLookAt = bot.lookAt.bind(bot);
         bot.lookAt = async function(point, force = false) {
           if (!bot.entity || !point) return _origLookAt(point, force);
           try {
             const dx = point.x - bot.entity.position.x;
-            const dy = (point.y != null ? point.y : bot.entity.position.y + 1.62) - (bot.entity.position.y + 1.62);
+            const dy = (point.y != null ? point.y : bot.entity.position.y + 1.62)
+                       - (bot.entity.position.y + 1.62);
             const dz = point.z - bot.entity.position.z;
-            const targetYaw = Math.atan2(-dx, dz);
-            const targetPitch = Math.atan2(-dy, Math.sqrt(dx*dx + dz*dz));
+            const tYaw   = Math.atan2(-dx, dz);
+            const tPitch = Math.atan2(-dy, Math.sqrt(dx*dx + dz*dz));
 
-            const currentYaw   = bot.entity.yaw;
-            const currentPitch = bot.entity.pitch;
+            let dYaw = tYaw - bot.entity.yaw;
+            while (dYaw >  Math.PI) dYaw -= 2 * Math.PI;
+            while (dYaw < -Math.PI) dYaw += 2 * Math.PI;
+            const dPitch = tPitch - bot.entity.pitch;
 
-            // Угловая дистанция (с учётом обёртки -π..π)
-            let dyaw = targetYaw - currentYaw;
-            while (dyaw >  Math.PI) dyaw -= 2 * Math.PI;
-            while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
-            const dpitch = targetPitch - currentPitch;
+            const MAX_DEG = 0.44; // ~25° в радианах за тик
+            const steps = Math.ceil(Math.max(Math.abs(dYaw), Math.abs(dPitch)) / MAX_DEG);
+            if (steps <= 1 || force) return _origLookAt(point, force);
 
-            const MAX_ROT_PER_TICK = 0.44; // ~25° за тик — max у быстрого игрока
-            const steps = Math.ceil(Math.max(Math.abs(dyaw), Math.abs(dpitch)) / MAX_ROT_PER_TICK);
-
-            if (steps <= 1 || force) {
-              return _origLookAt(point, force);
-            }
-
-            // Плавный поворот по шагам
+            const startYaw = bot.entity.yaw, startPitch = bot.entity.pitch;
             for (let i = 1; i <= steps; i++) {
               if (!bot.entity) break;
               const t = i / steps;
-              const interpYaw   = currentYaw   + dyaw   * t;
-              const interpPitch = currentPitch + dpitch * t;
-              try {
-                bot.entity.yaw   = interpYaw;
-                bot.entity.pitch = interpPitch;
-              } catch {}
+              bot.entity.yaw   = startYaw   + dYaw   * t;
+              bot.entity.pitch = startPitch + dPitch * t;
               await new Promise(r => setTimeout(r, 50));
             }
             return _origLookAt(point, true);
-          } catch {
-            return _origLookAt(point, force);
-          }
+          } catch { return _origLookAt(point, force); }
         };
       }
 
