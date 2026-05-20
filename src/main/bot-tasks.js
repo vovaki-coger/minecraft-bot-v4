@@ -245,19 +245,51 @@ class TaskManager {
   async _taskCraft(itemName, count) {
     if (!itemName) { this._chat("Что скрафтить?"); return; }
     this._chat("Крафчу " + itemName + "...");
-    const item = this.bot.registry.itemsByName[itemName];
+
+    // Получаем minecraft-data для текущей версии сервера
+    let mcData = null;
+    try { mcData = require("minecraft-data")(this.bot.version); } catch {}
+
+    // Ищем предмет по registry-имени, displayName или частичному совпадению
+    let item = this.bot.registry.itemsByName[itemName];
+    if (!item && mcData) {
+      const ln = itemName.toLowerCase().replace(/\s+/g, "_");
+      item = Object.values(mcData.itemsByName).find(i =>
+        i.name === ln ||
+        (i.displayName || "").toLowerCase() === ln ||
+        i.name.includes(ln) ||
+        ln.includes(i.name)
+      );
+    }
     if (!item) { this._chat("Не знаю предмет: " + itemName); return; }
-    const table = this.bot.findBlock({
-      matching: this.bot.registry.blocksByName["crafting_table"]?.id,
-      maxDistance: 16,
-    });
+
+    // Ищем верстак рядом (не обязательно — некоторые рецепты 2x2)
+    let table = null;
+    const craftingTableId = this.bot.registry.blocksByName["crafting_table"]?.id;
+    if (craftingTableId) {
+      table = this.bot.findBlock({ matching: craftingTableId, maxDistance: 16 });
+      if (table) {
+        // Подходим к верстаку
+        await this.bot.pathfinder.goto(
+          new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2)
+        ).catch(() => {});
+      }
+    }
+
     try {
-      const recipe = this.bot.recipesFor(item.id, null, 1, table)[0];
-      if (!recipe) { this._chat("Нет рецепта для " + itemName); return; }
-      await this.bot.craft(recipe, count, table);
-      this._chat("Готово! Скрафтил " + count + " " + itemName);
+      // Пробуем с верстаком, затем без (2x2 рецепты)
+      let recipes = this.bot.recipesFor(item.id, null, 1, table);
+      if (!recipes.length && table) {
+        recipes = this.bot.recipesFor(item.id, null, 1, null);
+      }
+      if (!recipes.length) {
+        this._chat("Нет рецепта для " + (item.displayName || item.name));
+        return;
+      }
+      await this.bot.craft(recipes[0], count, table);
+      this._chat("✅ Скрафтил " + count + "x " + (item.displayName || item.name));
     } catch (err) {
-      this._chat("Не получилось: " + err.message.slice(0, 50));
+      this._chat("Ошибка крафта: " + err.message.slice(0, 60));
     }
   }
 
