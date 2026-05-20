@@ -446,30 +446,55 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
     const item = bot.registry.itemsByName[itemName];
     if (!item) { this._log("Неизвестный предмет: " + itemName); return false; }
 
-    const table = bot.findBlock({
-      matching: bot.registry.blocksByName["crafting_table"]?.id,
-      maxDistance: 8,
-    });
-
-    // Если нет верстака рядом — подходим к ближайшему
-    if (!table && itemName !== "crafting_table") {
-      const farTable = bot.findBlock({
-        matching: bot.registry.blocksByName["crafting_table"]?.id,
-        maxDistance: 32,
-      });
-      if (farTable) {
-        await bot.pathfinder.goto(new goals.GoalBlock(farTable.position.x, farTable.position.y, farTable.position.z)).catch(() => {});
+    // Шаг 0: нет досок — крафтим из брёвен (нужны для верстака и многих рецептов)
+    const LOG_NAMES = ["oak_log","birch_log","spruce_log","jungle_log","acacia_log","dark_oak_log"];
+    const needsPlanks = ["crafting_table","wooden_pickaxe","wooden_axe","wooden_sword","wooden_shovel","stick","oak_planks"];
+    if (needsPlanks.includes(itemName)) {
+      const hasPlanks = bot.inventory.items().some(i => i.name.endsWith("_planks"));
+      if (!hasPlanks) {
+        for (const logName of LOG_NAMES) {
+          const logItem = bot.inventory.items().find(i => i.name === logName);
+          if (!logItem) continue;
+          const plankName = logName.replace("_log", "_planks");
+          const plankType = bot.registry.itemsByName[plankName];
+          if (!plankType) continue;
+          const plankRecipe = bot.recipesFor(plankType.id, null, 1, null)[0];
+          if (plankRecipe) {
+            await bot.craft(plankRecipe, 4, null).catch(() => {});
+            this._log("Скрафтил доски из " + logName);
+            break;
+          }
+        }
       }
     }
 
-    const updatedTable = bot.findBlock({
-      matching: bot.registry.blocksByName["crafting_table"]?.id,
-      maxDistance: 8,
-    });
+    // Шаг 1: пробуем без стола (2×2 рецепты)
+    let recipe = bot.recipesFor(item.id, null, 1, null)[0];
+    let usedTable = null;
 
-    const recipe = bot.recipesFor(item.id, null, 1, updatedTable)[0];
-    if (!recipe) { this._log("Нет рецепта для " + itemName); return false; }
-    await bot.craft(recipe, 1, updatedTable);
+    // Шаг 2: если нет — ищем верстак поблизости
+    if (!recipe) {
+      const tableId = bot.registry.blocksByName["crafting_table"]?.id;
+      let table = tableId ? bot.findBlock({ matching: tableId, maxDistance: 8 }) : null;
+
+      if (!table && itemName !== "crafting_table" && tableId) {
+        const farTable = bot.findBlock({ matching: tableId, maxDistance: 48 });
+        if (farTable) {
+          await bot.pathfinder.goto(new goals.GoalBlock(farTable.position.x, farTable.position.y, farTable.position.z)).catch(() => {});
+          table = bot.findBlock({ matching: tableId, maxDistance: 8 });
+        }
+      }
+
+      recipe = bot.recipesFor(item.id, null, 1, table || null)[0];
+      usedTable = table || null;
+    }
+
+    if (!recipe) {
+      this._log("Нет рецепта для " + itemName + " (нет ингредиентов или верстака)");
+      return false;
+    }
+
+    await bot.craft(recipe, 1, usedTable).catch(e => { throw e; });
     this._log("Скрафтил: " + itemName);
     return true;
   }
