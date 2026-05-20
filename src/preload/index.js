@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     stopRecording: (botId, info) => ipcRenderer.invoke("anka:stopRecording", botId, info),
     cancelRecording: (botId) => ipcRenderer.invoke("anka:cancelRecording", botId),
     getStepCount: (botId) => ipcRenderer.invoke("anka:getStepCount", botId),
+    isRecording: (botId) => ipcRenderer.invoke("anka:isRecording", botId),
     delete: (id) => ipcRenderer.invoke("anka:delete", id),
     play: (botId, profileId) => ipcRenderer.invoke("anka:play", botId, profileId),
     clickSlot: (botId, slot, button) => ipcRenderer.invoke("anka:clickSlot", botId, slot, button),
