@@ -25,9 +25,9 @@ function createWindow() {
     height: 900,
     minWidth: 1100,
     minHeight: 700,
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#05070f",
     titleBarStyle: "default",
-    title: "Призмарин Бот v4.0",
+    title: "Призмарин Бот v4.1.4",
     icon: path.join(__dirname, "../../assets/icon.png"),
     webPreferences: {
       nodeIntegration: false,
@@ -100,7 +100,6 @@ function setupIpcHandlers() {
   ipcMain.handle("bot:sendChat", (_e, botId, message) =>
     botManager.sendChat(botId, message)
   );
-  // v4: Отправить сообщение только в AI, не в Minecraft чат
   ipcMain.handle("bot:sendAIOnly", (_e, botId, message) =>
     botManager.sendAIOnly(botId, message)
   );
@@ -143,14 +142,14 @@ function setupIpcHandlers() {
     return result.filePaths[0] || null;
   });
 
-
-  // ── Рекордер анки ─────────────────────────────────────────────────────────
+  // ── Рекордер анки ──────────────────────────────────────────────────────────
   ipcMain.handle("anka:list", () => ankaRecorder.listProfiles());
   ipcMain.handle("anka:startRecording", (_e, botId) => ankaRecorder.startRecording(botId));
   ipcMain.handle("anka:addStep", (_e, botId, step) => ankaRecorder.addStep(botId, step));
   ipcMain.handle("anka:stopRecording", (_e, botId, info) => ankaRecorder.stopRecording(botId, info));
   ipcMain.handle("anka:cancelRecording", (_e, botId) => ankaRecorder.cancelRecording(botId));
   ipcMain.handle("anka:getStepCount", (_e, botId) => ankaRecorder.getStepCount(botId));
+  ipcMain.handle("anka:isRecording", (_e, botId) => ankaRecorder.isRecording(botId));
   ipcMain.handle("anka:delete", (_e, id) => ankaRecorder.deleteProfile(id));
   ipcMain.handle("anka:play", async (_e, botId, profileId) => {
     const profile = ankaRecorder.getProfile(profileId);
