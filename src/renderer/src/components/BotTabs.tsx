@@ -7,79 +7,73 @@ export default function BotTabs() {
   const [showCreate, setShowCreate] = useState(false);
 
   const tabs = [
-    { id: "bots",        label: "Боты" },
-    { id: "models",      label: "Модели ИИ" },
-    { id: "anarchy",     label: "🏴‍☠️ Анархия" },
-    { id: "coordinator", label: "Координатор" },
-    { id: "settings",    label: "Настройки" },
+    { id: "bots",        label: "Боты",          color: "#00ff9d" },
+    { id: "models",      label: "Модели ИИ",     color: "#9d60ff" },
+    { id: "anarchy",     label: "⚓ Анархия",    color: "#ff2255" },
+    { id: "coordinator", label: "Координатор",    color: "#00c8ff" },
+    { id: "settings",    label: "Настройки",     color: "#ff8800" },
   ] as const;
 
   return (
-    <div
-      className="flex items-center border-b overflow-x-auto"
-      style={{ borderColor: "#3a3a3a", background: "#222", minHeight: 34 }}
-    >
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => setActiveTab(tab.id)}
-          className="px-4 py-1.5 text-xs font-mono whitespace-nowrap transition-colors"
-          style={{
-            color: activeTab === tab.id
-              ? (tab.id === "anarchy" ? "#e74c3c" : "#7ecc49")
-              : "#888",
-            borderBottom: activeTab === tab.id
-              ? `2px solid ${tab.id === "anarchy" ? "#e74c3c" : "#7ecc49"}`
-              : "2px solid transparent",
-            background: "none",
-            cursor: "pointer",
-          }}
-        >
-          {tab.label}
-        </button>
-      ))}
+    <div style={{
+      display: "flex", alignItems: "center",
+      borderBottom: "1px solid #1a2040",
+      background: "#07090f", minHeight: 32, overflowX: "auto",
+    }}>
+      {tabs.map((tab) => {
+        const active = activeTab === tab.id;
+        return (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+            padding: "0 14px", height: 32, fontSize: 11, fontFamily: "monospace",
+            color: active ? tab.color : "#3a4a6a",
+            borderBottom: active ? `2px solid ${tab.color}` : "2px solid transparent",
+            borderTop: "none", borderLeft: "none", borderRight: "none",
+            background: "none", cursor: "pointer", whiteSpace: "nowrap",
+            textShadow: active ? `0 0 8px ${tab.color}55` : "none",
+            transition: "color .15s",
+          }}>
+            {tab.label}
+          </button>
+        );
+      })}
 
-      <div className="flex-1" />
+      <div style={{ flex: 1 }} />
 
       {activeTab === "bots" && (
         <>
-          <div className="flex items-center gap-1 px-2 overflow-x-auto max-w-lg">
-            {bots.map((bot) => (
-              <button
-                key={bot.id}
-                onClick={() => setSelectedBot(bot.id)}
-                className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono rounded whitespace-nowrap"
-                style={{
-                  background: selectedBotId === bot.id ? "#2a3a2a" : "transparent",
-                  color: selectedBotId === bot.id ? "#7ecc49" : "#888",
-                  border: `1px solid ${selectedBotId === bot.id ? "#5b8c3e" : "transparent"}`,
-                  cursor: "pointer",
-                }}
-              >
-                <span
-                  className="w-1.5 h-1.5 rounded-full"
-                  style={{
-                    background:
-                      bot.status === "online"
-                        ? "#7ecc49"
-                        : bot.status === "connecting"
-                        ? "#f1c40f"
-                        : "#555",
-                  }}
-                />
-                {bot.config.nick}
-                {bot.config.aiEnabled && (
-                  <span className="text-xs" style={{ color: "#7ecc49" }}>⚡</span>
-                )}
-              </button>
-            ))}
+          <div style={{ display: "flex", gap: 3, padding: "0 8px", overflowX: "auto", maxWidth: 500 }}>
+            {bots.map((bot) => {
+              const sel = selectedBotId === bot.id;
+              const sc = bot.status === "online" ? "#00ff9d" : bot.status === "connecting" ? "#ffee22" : "#2a3a5a";
+              return (
+                <button key={bot.id} onClick={() => setSelectedBot(bot.id)} style={{
+                  display: "flex", alignItems: "center", gap: 5,
+                  padding: "2px 10px", fontSize: 11, fontFamily: "monospace",
+                  background: sel ? "rgba(0,255,157,.07)" : "transparent",
+                  color: sel ? "#00ff9d" : "#4a6080",
+                  border: `1px solid ${sel ? "rgba(0,255,157,.35)" : "transparent"}`,
+                  borderRadius: 4, cursor: "pointer", whiteSpace: "nowrap",
+                  boxShadow: sel ? "0 0 8px rgba(0,255,157,.12)" : "none",
+                  transition: "all .15s",
+                }}>
+                  <span style={{
+                    width: 5, height: 5, borderRadius: "50%", background: sc,
+                    display: "inline-block",
+                    boxShadow: bot.status === "online" ? `0 0 5px ${sc}` : "none",
+                  }} />
+                  {bot.config.nick}
+                  {bot.config.aiEnabled && (
+                    <span style={{ color: "#9d60ff", fontSize: 9 }}>⚡</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
-
-          <button
-            className="btn text-xs mx-2 py-1 px-2"
-            onClick={() => setShowCreate(true)}
-            style={{ color: "#7ecc49", borderColor: "#5b8c3e" }}
-          >
+          <button onClick={() => setShowCreate(true)} style={{
+            margin: "0 8px", padding: "2px 10px", fontSize: 11, fontFamily: "monospace",
+            background: "rgba(0,200,255,.06)", border: "1px solid rgba(0,200,255,.25)",
+            color: "#00c8ff", borderRadius: 4, cursor: "pointer",
+          }}>
             + Добавить бота
           </button>
         </>
