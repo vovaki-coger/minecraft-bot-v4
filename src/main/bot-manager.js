@@ -283,39 +283,34 @@ class BotManager {
       movements.canOpenDoors     = true;
       bot.pathfinder.setMovements(movements);
 
-      // ── 3. Перехват пакетов позиции (Baritone-стиль) ────────────────
-      // Baritone посылает position-пакеты строго раз в тик (50 ms).
-      // Слишком частые пакеты триггерят rate-based anti-cheat (Matrix, AAC, NoCheat+).
-      // Слишком редкие — timeout-kick. 50–60ms — идеальный диапазон.
+      // ── 3. Контроль скорости через physicsTick (без перехвата пакетов) ─
+      // ВАЖНО: перехват _client.write с дропом пакетов — НЕПРАВИЛЬНЫЙ подход.
+      // Если мы пропускаем промежуточный position-пакет, сервер видит что бот
+      // переместился за 1 тик на расстояние 3 тиков → "moved too fast" кик.
+      // Правильно: mineflayer сам отправляет ровно 1 пакет в тик (50ms)
+      // через physics loop — не надо перехватывать, надо контролировать СКОРОСТЬ.
+      //
+      // Контролируем скорость через setControlState: если бот движется быстрее
+      // допустимого — обнуляем forward/sprint на этот тик.
       {
-        const MIN_POS_INTERVAL = 50; // ms — один vanilla тик
-        const MAX_POS_INTERVAL = 60; // ms — небольшой рандом как у лагающего клиента
-        let _lastPosSent = 0;
-        const _origWrite = bot._client.write.bind(bot._client);
-
-        bot._client.write = function(name, params) {
-          if (name === "position" || name === "position_look" || name === "look") {
-            const now = Date.now();
-            const elapsed = now - _lastPosSent;
-            if (elapsed < MIN_POS_INTERVAL) return; // слишком рано — пропускаем
-            _lastPosSent = now;
-
-            // Микро-джиттер позиции (±0.0001 блока) — имитирует погрешность
-            // реального клиента, чтобы не выглядеть как идеально-точный бот
-            if ((name === "position" || name === "position_look") && params) {
-              const jitter = () => (Math.random() - 0.5) * 0.0002;
-              params = {
-                ...params,
-                x: params.x + jitter(),
-                z: params.z + jitter(),
-              };
+        const MAX_SPEED_PER_TICK = 0.18; // блоков/тик, чуть ниже vanilla walk 0.21585
+        let _prevPos = null;
+        const _speedWatcherId = bot.on('physicsTick', () => {
+          if (!bot.entity) return;
+          const pos = bot.entity.position;
+          if (_prevPos) {
+            const dx = pos.x - _prevPos.x;
+            const dz = pos.z - _prevPos.z;
+            const speed = Math.sqrt(dx*dx + dz*dz);
+            if (speed > MAX_SPEED_PER_TICK) {
+              // Бот движется слишком быстро — тормозим на этот тик
+              bot.setControlState('sprint', false);
             }
           }
-          return _origWrite(name, params);
-        };
-
+          _prevPos = pos.clone();
+        });
         bot.once("end", () => {
-          try { bot._client.write = _origWrite; } catch {}
+          try { bot.removeListener('physicsTick', _speedWatcherId); } catch {}
         });
       }
 

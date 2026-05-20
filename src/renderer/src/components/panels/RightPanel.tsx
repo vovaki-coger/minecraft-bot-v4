@@ -15,24 +15,31 @@ export default function RightPanel({ bot }: Props) {
   const [lobbyLoading, setLobbyLoading] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const aiChatContainerRef = useRef<HTMLDivElement>(null);
+  const mcPrevLen = useRef(0);
+  const aiPrevLen = useRef(0);
 
-  // Scroll only the chat container, NOT the whole viewport
-  const scrollToBottom = useCallback((ref: React.RefObject<HTMLDivElement | null>) => {
+  const scrollToBottom = useCallback((
+    ref: React.RefObject<HTMLDivElement | null>,
+    prevLen: React.MutableRefObject<number>,
+    newLen: number,
+  ) => {
     const el = ref.current;
     if (!el) return;
-    // Only auto-scroll if user is already near the bottom (within 80px)
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (isNearBottom) {
+    const isFirstLoad = prevLen.current === 0 && newLen > 0;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const isNearBottom = distFromBottom < 120;
+    if (isFirstLoad || isNearBottom) {
       el.scrollTop = el.scrollHeight;
     }
+    prevLen.current = newLen;
   }, []);
 
   useEffect(() => {
-    scrollToBottom(chatContainerRef);
+    scrollToBottom(chatContainerRef, mcPrevLen, bot?.chatHistory?.length ?? 0);
   }, [bot?.chatHistory, scrollToBottom]);
 
   useEffect(() => {
-    scrollToBottom(aiChatContainerRef);
+    scrollToBottom(aiChatContainerRef, aiPrevLen, bot?.aiChatHistory?.length ?? 0);
   }, [bot?.aiChatHistory, scrollToBottom]);
 
   useEffect(() => {
@@ -108,7 +115,7 @@ export default function RightPanel({ bot }: Props) {
   const aiMessages = bot?.aiChatHistory || [];
 
   return (
-    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320 }}>
+    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320, overflow: "hidden", minHeight: 0 }}>
       {/* Tabs */}
       <div className="flex border-b" style={{ borderColor: "#3a3a3a" }}>
         <button
