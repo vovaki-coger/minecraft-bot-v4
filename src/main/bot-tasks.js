@@ -62,7 +62,7 @@ class TaskManager {
         case "walk_to":      await this._taskWalkTo(args.x, args.y, args.z); break;
         case "explore":      await this._taskExplore(); break;
         case "farm_trees":   await this._taskFarmTrees(args.radius || 20, args.crop || "oak"); break;
-        case "farm_crops":   await this._taskFarmCrops(args.radius || 20, args.crop || "wheat"); break;
+        case "farm_crops":   await this._taskFarmCrops(args.radius || 20, args.crop || "wheat", args.delay || 300, args.useBoneMeal !== false); break;
         case "pvp_attack":   await this._taskPvpAttack(args.target); break;
         case "inventory":    this._reportInventory(); break;
         case "status":       this._reportStatus(); break;
@@ -136,12 +136,16 @@ class TaskManager {
       }
 
       exploreAttempts = 0;
+      // Идём к блоку и сразу ищем следующий
       await this.bot.pathfinder.goto(
-        new goals.GoalBlock(block.position.x, block.position.y, block.position.z)
+        new goals.GoalNear(block.position.x, block.position.y, block.position.z, 2)
       ).catch(() => {});
       if (!this._running) break;
-      await this.bot.dig(block).catch(() => {});
-      collected++;
+      const refreshed = this.bot.blockAt(block.position);
+      if (refreshed && refreshed.name !== "air") {
+        await this.bot.dig(refreshed).catch(() => {});
+        collected++;
+      }
       if (collected % 5 === 0) this._log("Собрано " + collected + "/" + count + " бревён");
     }
     this._chat("Готово! Собрал " + collected + " бревён");
@@ -350,7 +354,7 @@ class TaskManager {
       const dz = Math.floor(Math.random() * 60 - 30);
       const p = this.bot.entity.position;
       await this.bot.pathfinder.goto(new goals.GoalNear(p.x + dx, p.y, p.z + dz, 2)).catch(() => {});
-      await this._sleep(1200);
+      await this._sleep(300);
     }
     this._chat("Исследование завершено!");
   }
@@ -377,11 +381,136 @@ class TaskManager {
   }
 
 
+
+  // ══════════════════════════════════════════════════════════════════
+  // ФЕРМА ДЕРЕВЬЕВ — рубит → сажает саженцы → бонемил → повторяет
+  // ══════════════════════════════════════════════════════════════════
+
+  async _taskFarmTrees(radius, cropType) {
+    this._chat("🌲 Ферма деревьев: " + cropType + " радиус " + radius + "м");
+    if (!this.bot?.entity) return;
+
+    const TREE_MAP = {
+      oak:      { log: "oak_log",      sapling: "oak_sapling",      leaves: "oak_leaves" },
+      birch:    { log: "birch_log",    sapling: "birch_sapling",    leaves: "birch_leaves" },
+      spruce:   { log: "spruce_log",   sapling: "spruce_sapling",   leaves: "spruce_leaves" },
+      jungle:   { log: "jungle_log",   sapling: "jungle_sapling",   leaves: "jungle_leaves" },
+      acacia:   { log: "acacia_log",   sapling: "acacia_sapling",   leaves: "acacia_leaves" },
+      dark_oak: { log: "dark_oak_log", sapling: "dark_oak_sapling", leaves: "dark_oak_leaves" },
+    };
+    const tree = TREE_MAP[cropType] || TREE_MAP.oak;
+    const logId = this.bot.registry.blocksByName[tree.log]?.id;
+    if (!logId) { this._chat("Не знаю тип: " + cropType); return; }
+
+    let totalChopped = 0;
+    let exploreDir = 0;
+
+    for (let cycle = 0; cycle < 9999 && this._running; cycle++) {
+      const pos = this.bot.entity.position.clone();
+
+      // ── Ищем дерево (поиск + движение одновременно) ─────────────
+      let logBlock = this.bot.findBlock({ matching: logId, maxDistance: radius });
+
+      if (!logBlock) {
+        // Исследуем зигзагом чтобы найти деревья
+        this._log("Деревьев нет в " + radius + "м, ищу дальше...");
+        const angle = (exploreDir++ * 1.1) % (Math.PI * 2);
+        const dist = 20 + (exploreDir % 6) * 15;
+        await this.bot.pathfinder.goto(new goals.GoalNear(
+          pos.x + Math.cos(angle) * dist, pos.y, pos.z + Math.sin(angle) * dist, 3
+        )).catch(() => {});
+        await this._sleep(300);
+        continue;
+      }
+      exploreDir = 0;
+
+      // ── Находим основание дерева (нижний log) ────────────────────
+      let bx = logBlock.position.x, bz = logBlock.position.z;
+      let by = logBlock.position.y;
+      for (let dy = 0; dy < 20; dy++) {
+        const below = this.bot.blockAt({ x: bx, y: by - 1, z: bz });
+        if (!below || below.name !== tree.log) break;
+        by--;
+      }
+
+      // ── Собираем все блоки ствола ─────────────────────────────────
+      const stemBlocks = [];
+      for (let dy = 0; dy <= 20; dy++) {
+        const lb = this.bot.blockAt({ x: bx, y: by + dy, z: bz });
+        if (!lb || lb.name !== tree.log) break;
+        stemBlocks.push(lb);
+      }
+
+      // ── Начинаем движение к дереву и рубим на ходу ───────────────
+      this._log("Рублю " + cropType + " (" + stemBlocks.length + " блоков)");
+      for (const lb of stemBlocks) {
+        if (!this._running) return;
+        const d = this.bot.entity.position.distanceTo(lb.position);
+        if (d > 4) {
+          await this.bot.pathfinder.goto(new goals.GoalNear(lb.position.x, lb.position.y, lb.position.z, 2)).catch(() => {});
+        }
+        await this.bot.dig(lb).catch(() => {});
+        await this._sleep(100);
+      }
+      totalChopped += stemBlocks.length;
+
+      // ── Подбираем дроп (ждём немного) ────────────────────────────
+      await this._sleep(400);
+      const dropped = Object.values(this.bot.entities)
+        .filter(e => e.type === "object" && e.objectType === "Item" &&
+          e.position?.distanceTo({ x: bx, y: by, z: bz }) < 12)
+        .slice(0, 15);
+      for (const item of dropped) {
+        if (!this._running) return;
+        if (item.position?.distanceTo(this.bot.entity.position) > 2) {
+          await this.bot.pathfinder.goto(new goals.GoalNear(item.position.x, item.position.y, item.position.z, 1)).catch(() => {});
+        }
+        await this._sleep(80);
+      }
+
+      // ── Сажаем саженец ────────────────────────────────────────────
+      const saplingItem = this.bot.inventory.items().find(i => i.name === tree.sapling);
+      if (saplingItem) {
+        const groundBlock = this.bot.blockAt({ x: bx, y: by - 1, z: bz });
+        const airBlock = this.bot.blockAt({ x: bx, y: by, z: bz });
+        if (groundBlock && airBlock?.name === "air" &&
+          ["grass_block","dirt","coarse_dirt","podzol","rooted_dirt"].includes(groundBlock.name)) {
+          await this.bot.pathfinder.goto(new goals.GoalNear(bx, by, bz, 2)).catch(() => {});
+          await this.bot.equip(saplingItem, "hand").catch(() => {});
+          await this.bot.activateBlock(groundBlock).catch(() => {});
+          await this._sleep(150);
+
+          // Бонемил на саженец
+          const bone = this.bot.inventory.items().find(i => i.name === "bone_meal");
+          if (bone) {
+            await this.bot.equip(bone, "hand").catch(() => {});
+            for (let bmi = 0; bmi < 8; bmi++) {
+              const bn = this.bot.inventory.items().find(ii => ii.name === "bone_meal");
+              if (!bn) break;
+              const sap = this.bot.blockAt({ x: bx, y: by, z: bz });
+              if (!sap || sap.name === "air") break; // вырос в дерево
+              await this.bot.equip(bn, "hand").catch(() => {});
+              await this.bot.activateBlock(sap).catch(() => {});
+              await this._sleep(80);
+            }
+          }
+        }
+      }
+
+      // ── Сдать в сундук если инвентарь полон ───────────────────────
+      if (this.bot.inventory.items().length > 25) await this._depositFarmItems();
+
+      this._log("✅ Цикл #" + (cycle + 1) + " | всего срублено: " + totalChopped + " блоков");
+      await this._sleep(300);
+    }
+    this._chat("🌲 Ферма деревьев остановлена. Срублено: " + totalChopped + " блоков");
+  }
+
   // ══════════════════════════════════════════════════════════════════
   // ФЕРМА КУЛЬТУР — полный автоматический цикл с костной мукой
   // ══════════════════════════════════════════════════════════════════
 
-  async _taskFarmCrops(radius, cropType) {
+  async _taskFarmCrops(radius, cropType, delay = 300, useBoneMeal = true) {
     this._log("Запускаю ферму культур: " + cropType + " радиус " + radius + "м");
     this._chat("🌾 Ферма культур запущена: " + cropType);
     if (!this.bot?.entity) return;
@@ -392,7 +521,8 @@ class TaskManager {
       potato:   { seed: "potato",         block: "potatoes",     maxAge: 7, requiredGround: "farmland" },
       beetroot: { seed: "beetroot_seeds", block: "beetroots",    maxAge: 3, requiredGround: "farmland" },
       melon:    { seed: "melon_seeds",    block: "melon_stem",   maxAge: 7, requiredGround: "farmland" },
-      pumpkin:  { seed: "pumpkin_seeds",  block: "pumpkin_stem", maxAge: 7, requiredGround: "farmland" },
+      pumpkin:      { seed: "pumpkin_seeds",  block: "pumpkin_stem",  maxAge: 7, requiredGround: "farmland" },
+      nether_wart:  { seed: "nether_wart",     block: "nether_wart",   maxAge: 3, requiredGround: "soul_sand"  },
     };
     const crop = CROPS[cropType] || CROPS.wheat;
 
@@ -402,8 +532,8 @@ class TaskManager {
 
       // ── 1. Вспахать землю ────────────────────────────────────────
       const hoe = this.bot.inventory.items().find(i => i.name.includes("_hoe"));
-      const farmlands = this._blocksInRadius("farmland", radius, pos);
-      if (farmlands.length < 4 && hoe) {
+      const farmlands = this._blocksInRadius(crop.requiredGround || "farmland", radius, pos);
+      if (farmlands.length < 4 && hoe && (crop.requiredGround || "farmland") === "farmland") {
         const dirtBlocks = this._blocksInRadius("dirt", Math.min(radius, 12), pos)
           .concat(this._blocksInRadius("grass_block", Math.min(radius, 12), pos))
           .slice(0, 30);
@@ -419,9 +549,10 @@ class TaskManager {
       }
 
       // ── 2. Посадить семена на пустые грядки ─────────────────────
-      const freshFarmlands = this._blocksInRadius("farmland", radius, pos);
+      const groundType = (crop && crop.requiredGround) ? crop.requiredGround : "farmland";
+      const freshFarmlands = this._blocksInRadius(groundType, radius, pos);
       if (freshFarmlands.length === 0) {
-        this._chat("⚠️ Нет farmland! Нужна вспаханная земля рядом с водой.");
+        this._chat("⚠️ Нет " + groundType + "! Нужен подходящий блок почвы.");
         await this._sleep(15000);
         continue;
       }
@@ -452,21 +583,21 @@ class TaskManager {
         await this.bot.equip(s, "hand").catch(() => {});
         await this.bot.activateBlock(farmland).catch(() => {});
         planted++;
-        await this._sleep(120);
+        await this._sleep(Math.min(delay, 200));
       }
       if (planted > 0) this._log("Посадил " + planted + " культур");
 
       // ── 3. Костная мука для ускорения ───────────────────────────
-      await this._applyBoneMeal(crop, radius, pos);
+      if (useBoneMeal) await this._applyBoneMeal(crop, radius, pos);
 
       // ── 4. Ждём роста (проверяем каждые 15 сек, применяем бонемил) ─
       this._log("Жду роста...");
-      for (let w = 0; w < 40 && this._running; w++) {
-        await this._sleep(15000);
+      for (let w = 0; w < 120 && this._running; w++) {
+        await this._sleep(5000);
         const grown = this._findMatureCrops(crop, radius, pos);
         if (grown.length > 0) { this._log(grown.length + " культур выросло!"); break; }
-        if (w % 3 === 0) await this._applyBoneMeal(crop, radius, pos);
-        if (w % 4 === 0) this._log("Жду... (" + w * 15 + "с)");
+        if (useBoneMeal && w % 4 === 0) await this._applyBoneMeal(crop, radius, pos);
+        if (w % 8 === 0) this._log("Жду роста... выросло: " + grown.length + "/" + freshFarmlands.length);
       }
 
       // ── 5. Собрать урожай ─────────────────────────────────────────
@@ -488,7 +619,7 @@ class TaskManager {
       }
 
       this._log("✅ Цикл " + (cycle + 1) + ": посажено=" + planted + " собрано=" + harvested);
-      await this._sleep(2000);
+      await this._sleep(500);
     }
     this._chat("🌾 Ферма остановлена");
   }
@@ -531,11 +662,11 @@ class TaskManager {
 
   // Найти блоки определённого типа в радиусе
   _blocksInRadius(blockName, radius, pos) {
-    const r = Math.round(radius);
+    const r = Math.round(Math.min(radius, 40));
     const results = [];
     for (let dx = -r; dx <= r; dx++) {
       for (let dz = -r; dz <= r; dz++) {
-        for (let dy = -4; dy <= 4; dy++) {
+        for (let dy = -5; dy <= 5; dy++) {
           const b = this.bot.blockAt(pos.offset(dx, dy, dz));
           if (b && b.name === blockName) results.push(b);
         }
