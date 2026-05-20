@@ -4,6 +4,7 @@
  */
 const { goals } = require("mineflayer-pathfinder");
 const log = require("electron-log");
+const Vec3 = require("vec3");
 
 class TaskManager {
   constructor(botInstance, emit) {
@@ -425,10 +426,10 @@ class TaskManager {
       exploreDir = 0;
 
       // ── Находим основание дерева (нижний log) ────────────────────
-      let bx = logBlock.position.x, bz = logBlock.position.z;
-      let by = logBlock.position.y;
+      let bx = Math.floor(logBlock.position.x), bz = Math.floor(logBlock.position.z);
+      let by = Math.floor(logBlock.position.y);
       for (let dy = 0; dy < 20; dy++) {
-        const below = this.bot.blockAt({ x: bx, y: by - 1, z: bz });
+        const below = this.bot.blockAt(new Vec3(bx, by - 1, bz));
         if (!below || below.name !== tree.log) break;
         by--;
       }
@@ -436,7 +437,7 @@ class TaskManager {
       // ── Собираем все блоки ствола ─────────────────────────────────
       const stemBlocks = [];
       for (let dy = 0; dy <= 20; dy++) {
-        const lb = this.bot.blockAt({ x: bx, y: by + dy, z: bz });
+        const lb = this.bot.blockAt(new Vec3(bx, by + dy, bz));
         if (!lb || lb.name !== tree.log) break;
         stemBlocks.push(lb);
       }
@@ -455,24 +456,25 @@ class TaskManager {
       totalChopped += stemBlocks.length;
 
       // ── Подбираем дроп (ждём немного) ────────────────────────────
-      await this._sleep(400);
+      await this._sleep(600);
+      const treePos = new Vec3(bx, by, bz);
       const dropped = Object.values(this.bot.entities)
-        .filter(e => e.type === "object" && e.objectType === "Item" &&
-          e.position?.distanceTo({ x: bx, y: by, z: bz }) < 12)
-        .slice(0, 15);
+        .filter(e => e.name === "item" && e.isValid &&
+          e.position?.distanceTo(treePos) < 14)
+        .slice(0, 20);
       for (const item of dropped) {
         if (!this._running) return;
-        if (item.position?.distanceTo(this.bot.entity.position) > 2) {
+        if (item.isValid && item.position?.distanceTo(this.bot.entity.position) > 1.5) {
           await this.bot.pathfinder.goto(new goals.GoalNear(item.position.x, item.position.y, item.position.z, 1)).catch(() => {});
         }
-        await this._sleep(80);
+        await this._sleep(60);
       }
 
       // ── Сажаем саженец ────────────────────────────────────────────
       const saplingItem = this.bot.inventory.items().find(i => i.name === tree.sapling);
       if (saplingItem) {
-        const groundBlock = this.bot.blockAt({ x: bx, y: by - 1, z: bz });
-        const airBlock = this.bot.blockAt({ x: bx, y: by, z: bz });
+        const groundBlock = this.bot.blockAt(new Vec3(bx, by - 1, bz));
+        const airBlock = this.bot.blockAt(new Vec3(bx, by, bz));
         if (groundBlock && airBlock?.name === "air" &&
           ["grass_block","dirt","coarse_dirt","podzol","rooted_dirt"].includes(groundBlock.name)) {
           await this.bot.pathfinder.goto(new goals.GoalNear(bx, by, bz, 2)).catch(() => {});
@@ -487,8 +489,8 @@ class TaskManager {
             for (let bmi = 0; bmi < 8; bmi++) {
               const bn = this.bot.inventory.items().find(ii => ii.name === "bone_meal");
               if (!bn) break;
-              const sap = this.bot.blockAt({ x: bx, y: by, z: bz });
-              if (!sap || sap.name === "air") break; // вырос в дерево
+              const sap = this.bot.blockAt(new Vec3(bx, by, bz));
+              if (!sap || sap.name === "air") break;
               await this.bot.equip(bn, "hand").catch(() => {});
               await this.bot.activateBlock(sap).catch(() => {});
               await this._sleep(80);
