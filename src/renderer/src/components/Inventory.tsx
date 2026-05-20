@@ -10,7 +10,6 @@ function getItemIconSources(name: string): string[] {
     `https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets/1.20.4/assets/minecraft/textures/block/${name}.png`,
     `https://minecraft.wiki/images/Invicon_${formatted}.png`,
   ];
-}.png`;
 }
 
 type Category = "all" | "weapons" | "tools" | "armor" | "food" | "blocks" | "misc";
