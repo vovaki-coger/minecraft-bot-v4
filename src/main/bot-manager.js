@@ -248,47 +248,124 @@ class BotManager {
         log.info("[BotManager] AIBrain started for bot", botId);
       }
 
-      // ── АНТИ-ЧИТ ОБХОД: настройка движения по стилю Baritone/Biblioran ──
-      // Ограничиваем скорость физики до уровня ванильного клиента
+      // ══════════════════════════════════════════════════════════════════
+      // АНТИ-ЧИТ ОБХОД v2 — техники Baritone + Biblioran
+      // Baritone (github.com/cabaletta/baritone) обходит анти-чит через:
+      //  1. Строгое соблюдение vanilla speed limits (нет спринта, нет fly)
+      //  2. Плавные повороты — не мгновенный snap, а lerp по тикам
+      //  3. Пакеты позиции ровно раз в тик (50 ms) — не чаще, не реже
+      //  4. Наземная проверка перед горизонтальным движением
+      //  5. Микро-джиттер позиции чтобы не выглядеть как бот
+      // ══════════════════════════════════════════════════════════════════
+
+      // ── 1. Ограничиваем физику до vanilla walk ──────────────────────
       try {
-        // Vanilla walk: 0.21585 blocks/tick, sprint: 0.2806 blocks/tick
-        // Занижаем немного чтобы гарантированно не триггерить speed-чек
         if (bot.physics) {
-          bot.physics.walkSpeed   = 0.13;   // ниже ванильного 0.21585
-          bot.physics.sprintSpeed = 0.13;   // полностью убираем спринт на уровне физики
-          bot.physics.stepHeight  = 0.6;    // стандартный vanilla step
+          // Vanilla walk = 0.21585 bpt, sprint = 0.2806 bpt
+          // Ставим чуть ниже — гарантия против speed-чека
+          bot.physics.walkSpeed      = 0.15;
+          bot.physics.sprintSpeed    = 0.15;
+          bot.physics.stepHeight     = 0.6;   // vanilla step
+          bot.physics.gravity        = 0.08;  // точно vanilla (дефолт и так 0.08)
+          bot.physics.airdrag        = 0.98;
+          bot.physics.groundFriction = 0.6;
         }
       } catch(e) { log.warn("[AC] Physics patch failed:", e.message); }
 
+      // ── 2. Pathfinder — запрещаем все "нечеловеческие" движения ─────
       const movements = new Movements(bot);
-      movements.allowSprinting   = false;  // без спринта
+      movements.allowSprinting   = false; // спринт триггерит speed-чек
       movements.canDig           = true;
-      movements.allow1by1towers  = false;  // убираем башни (детектируются как scaffold)
-      movements.allowParkour     = false;  // паркур — частая причина "moved wrongly"
-      movements.allowFreeMotion  = false;  // без свободного движения
-      movements.maxDropDown      = 3;      // не прыгаем с высоты > 3 (детектируется fly)
+      movements.allow1by1towers  = false; // scaffold детектируется
+      movements.allowParkour     = false; // parkour → "moved wrongly"
+      movements.allowFreeMotion  = false;
+      movements.maxDropDown      = 3;     // drop > 3 → fly/jump-чек
       movements.canOpenDoors     = true;
       bot.pathfinder.setMovements(movements);
 
-      // ── Ограничиваем частоту пакетов позиции чтобы не триггерить rate-чек ──
-      // Перехватываем _client.write и добавляем минимальный интервал между position-пакетами
+      // ── 3. Перехват пакетов позиции (Baritone-стиль) ────────────────
+      // Baritone посылает position-пакеты строго раз в тик (50 ms).
+      // Слишком частые пакеты триггерят rate-based anti-cheat (Matrix, AAC, NoCheat+).
+      // Слишком редкие — timeout-kick. 50–60ms — идеальный диапазон.
       {
-        const MIN_POS_INTERVAL = 55; // ms, чуть больше ванильных 50ms (один тик)
+        const MIN_POS_INTERVAL = 50; // ms — один vanilla тик
+        const MAX_POS_INTERVAL = 60; // ms — небольшой рандом как у лагающего клиента
         let _lastPosSent = 0;
         const _origWrite = bot._client.write.bind(bot._client);
+
         bot._client.write = function(name, params) {
           if (name === "position" || name === "position_look" || name === "look") {
             const now = Date.now();
-            // Пропускаем пакет если слишком рано — он будет послан на следующем тике
-            if (now - _lastPosSent < MIN_POS_INTERVAL) return;
+            const elapsed = now - _lastPosSent;
+            if (elapsed < MIN_POS_INTERVAL) return; // слишком рано — пропускаем
             _lastPosSent = now;
+
+            // Микро-джиттер позиции (±0.0001 блока) — имитирует погрешность
+            // реального клиента, чтобы не выглядеть как идеально-точный бот
+            if ((name === "position" || name === "position_look") && params) {
+              const jitter = () => (Math.random() - 0.5) * 0.0002;
+              params = {
+                ...params,
+                x: params.x + jitter(),
+                z: params.z + jitter(),
+              };
+            }
           }
           return _origWrite(name, params);
         };
-        // Очищаем перехват когда бот отключается
+
         bot.once("end", () => {
           try { bot._client.write = _origWrite; } catch {}
         });
+      }
+
+      // ── 4. Плавные повороты головы (Baritone rotation lerp) ─────────
+      // Baritone не делает мгновенный lookAt — он плавно поворачивает голову
+      // по 15-25° за тик. Мгновенные 180° повороты — верный признак бота.
+      {
+        const _origLookAt = bot.lookAt.bind(bot);
+        bot.lookAt = async function(point, force = false) {
+          if (!bot.entity || !point) return _origLookAt(point, force);
+          try {
+            const dx = point.x - bot.entity.position.x;
+            const dy = (point.y != null ? point.y : bot.entity.position.y + 1.62) - (bot.entity.position.y + 1.62);
+            const dz = point.z - bot.entity.position.z;
+            const targetYaw = Math.atan2(-dx, dz);
+            const targetPitch = Math.atan2(-dy, Math.sqrt(dx*dx + dz*dz));
+
+            const currentYaw   = bot.entity.yaw;
+            const currentPitch = bot.entity.pitch;
+
+            // Угловая дистанция (с учётом обёртки -π..π)
+            let dyaw = targetYaw - currentYaw;
+            while (dyaw >  Math.PI) dyaw -= 2 * Math.PI;
+            while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+            const dpitch = targetPitch - currentPitch;
+
+            const MAX_ROT_PER_TICK = 0.44; // ~25° за тик — max у быстрого игрока
+            const steps = Math.ceil(Math.max(Math.abs(dyaw), Math.abs(dpitch)) / MAX_ROT_PER_TICK);
+
+            if (steps <= 1 || force) {
+              return _origLookAt(point, force);
+            }
+
+            // Плавный поворот по шагам
+            for (let i = 1; i <= steps; i++) {
+              if (!bot.entity) break;
+              const t = i / steps;
+              const interpYaw   = currentYaw   + dyaw   * t;
+              const interpPitch = currentPitch + dpitch * t;
+              try {
+                bot.entity.yaw   = interpYaw;
+                bot.entity.pitch = interpPitch;
+              } catch {}
+              await new Promise(r => setTimeout(r, 50));
+            }
+            return _origLookAt(point, true);
+          } catch {
+            return _origLookAt(point, force);
+          }
+        };
       }
 
       
