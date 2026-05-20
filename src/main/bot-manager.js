@@ -501,13 +501,13 @@ class BotManager {
           }
         }, 1000);
       }
-    } else if (instance.config.autoLogin && LOGIN_PATTERNS.some(p => p.test(m))) {
+    } else if (instance.config.autoLogin && !instance._authAttempted && LOGIN_PATTERNS.some(p => p.test(m))) {
+      instance._authAttempted = true;
       log.info("[BotManager] Auto-login triggered by chat:", message);
       setTimeout(() => {
         if (instance.bot) {
           instance.bot.chat("/login " + pass);
           this._addChat(instance, "system", "🔑 Авто-логин выполнен");
-          instance._authAttempted = true;
         }
       }, 1000);
     }
@@ -524,6 +524,7 @@ class BotManager {
       REGISTER_PATTERNS.some(p => p.test(lower));
 
     const needsLogin = instance.config.autoLogin &&
+      !instance._authAttempted &&
       LOGIN_PATTERNS.some(p => p.test(lower));
 
     if (needsRegister) {
@@ -905,6 +906,32 @@ class BotManager {
     } catch (err) {
       return { success: false, error: err.message };
     }
+  }
+
+
+  // ── Запуск/остановка скриптовой задачи ───────────────────────────────────
+  async runBotTask(botId, taskName, args) {
+    const instance = this.bots.get(botId);
+    if (!instance?.bot || instance.status !== "online") throw new Error("Бот не в сети");
+    if (!instance.taskManager) {
+      const { TaskManager } = require("./bot-tasks");
+      instance.taskManager = new TaskManager(instance, this.emit);
+    }
+    this.emit("bot:taskStarted", { botId, task: taskName });
+    instance.taskManager.runTask(taskName, args || {}).then(() => {
+      this.emit("bot:taskStopped", { botId, task: taskName });
+    }).catch(err => {
+      this.emit("bot:taskStopped", { botId, task: taskName, error: err.message });
+    });
+    return { success: true, task: taskName };
+  }
+
+  stopBotTask(botId) {
+    const instance = this.bots.get(botId);
+    if (!instance?.taskManager) return { success: false };
+    instance.taskManager.stopAll().catch(() => {});
+    this.emit("bot:taskStopped", { botId });
+    return { success: true };
   }
 
   async startAnarchyProtocol(botId, opts) {
