@@ -33,8 +33,13 @@ function getEmoji(name: string): string {
   return "📦";
 }
 
+function stripNs(name: string): string {
+  return name ? name.replace(/^minecraft:/, "") : name;
+}
+
 function getItemIcon(name: string): string {
-  const fmt = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("_");
+  const clean = stripNs(name);
+  const fmt = clean.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("_");
   return `https://minecraft.wiki/images/Invicon_${fmt}.png`;
 }
 
@@ -47,14 +52,15 @@ function SlotCell({ slot, hotbarActive, lmbFlash, rmbFlash, onClick, onRightClic
 }) {
   const [imgOk, setImgOk] = useState(true);
   const [hovered, setHovered] = useState(false);
-  const hasItem = Boolean(slot.name);
+  const cleanName = stripNs(slot.name);
+  const hasItem = Boolean(cleanName);
 
-  useEffect(() => { setImgOk(true); }, [slot.name]);
+  useEffect(() => { setImgOk(true); }, [cleanName]);
 
   const borderCol = lmbFlash ? "#00ff9d" : rmbFlash ? "#ffaa00" : hotbarActive ? "#00c8ff" : hasItem ? "#222c48" : "#141c30";
   const bg        = lmbFlash ? "rgba(0,255,157,.12)" : rmbFlash ? "rgba(255,170,0,.12)" : hotbarActive ? "rgba(0,200,255,.07)" : "rgba(0,0,0,.45)";
   const glow      = lmbFlash ? "0 0 8px rgba(0,255,157,.4)" : rmbFlash ? "0 0 8px rgba(255,170,0,.4)" : hotbarActive ? "0 0 8px rgba(0,200,255,.25)" : "none";
-  const label     = (slot.displayName || slot.name || "").replace(/_/g, " ");
+  const label     = (stripNs(slot.displayName) || cleanName || "").replace(/_/g, " ");
 
   return (
     <div
@@ -74,10 +80,10 @@ function SlotCell({ slot, hotbarActive, lmbFlash, rmbFlash, onClick, onRightClic
       {hasItem ? (
         <>
           {imgOk ? (
-            <img src={getItemIcon(slot.name)} alt={slot.name} width={26} height={26}
+            <img src={getItemIcon(cleanName)} alt={cleanName} width={26} height={26}
               style={{ imageRendering: "pixelated" }} onError={() => setImgOk(false)} />
           ) : (
-            <span style={{ fontSize: 20, lineHeight: 1 }}>{getEmoji(slot.name)}</span>
+            <span style={{ fontSize: 20, lineHeight: 1 }}>{getEmoji(cleanName)}</span>
           )}
           {Number(slot.count) > 1 && (
             <span style={{
@@ -342,20 +348,26 @@ export default function CenterPanel({ bot }: { bot: BotState | null }) {
           </div>
 
           {/* Chest/window slots */}
-          {currentWindow && chestGrid.length > 0 && (
+          {currentWindow && (
             <div style={{ padding: "8px 10px", borderBottom: "1px solid #1a2040", background: "rgba(0,200,255,.015)" }}>
               <div style={{ color: "#3a5060", fontSize: 10, marginBottom: 5 }}>📦 {winTitle || "Сундук / Меню"}</div>
-              <div style={{ overflowX: "auto" }}>
-                <div style={{ display: "grid", gridTemplateColumns: `repeat(9, ${SLOT_SZ}px)`, gap: 2, width: "fit-content" }}>
-                  {chestGrid.map((slot) => (
-                    <SlotCell key={slot.slot} slot={slot} hotbarActive={false}
-                      lmbFlash={lmbFlash.has(slot.slot)} rmbFlash={rmbFlash.has(slot.slot)}
-                      onClick={() => handleClick(slot, 0, winTitle)}
-                      onRightClick={(e) => { e.preventDefault(); handleClick(slot, 1, winTitle); }}
-                    />
-                  ))}
+              {chestGrid.length > 0 ? (
+                <div style={{ overflowX: "auto" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(9, ${SLOT_SZ}px)`, gap: 2, width: "fit-content" }}>
+                    {chestGrid.map((slot) => (
+                      <SlotCell key={slot.slot} slot={slot} hotbarActive={false}
+                        lmbFlash={lmbFlash.has(slot.slot)} rmbFlash={rmbFlash.has(slot.slot)}
+                        onClick={() => handleClick(slot, 0, winTitle)}
+                        onRightClick={(e) => { e.preventDefault(); handleClick(slot, 1, winTitle); }}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div style={{ color: "#1e3a50", fontSize: 11, padding: "10px 0", fontFamily: "monospace" }}>
+                  ⏳ Загрузка содержимого…
+                </div>
+              )}
             </div>
           )}
 

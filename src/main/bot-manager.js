@@ -451,15 +451,19 @@ class BotManager {
       const slots = [];
       const winSlots = win.slots || [];
       // inventoryStart = первый слот инвентаря игрока (только слоты самого окна)
-      const slotCount = win.inventoryStart > 0
+      // Используем inventoryStart если он > 0, иначе берём длину массива (до 54)
+      const slotCount = (win.inventoryStart != null && win.inventoryStart > 0)
         ? win.inventoryStart
         : Math.min(winSlots.length, 54);
+      // Если вообще нет слотов — не шлём пустое окно, ждём updateSlot
+      if (slotCount === 0) return;
       for (let i = 0; i < slotCount; i++) {
         const item = winSlots[i];
-        const name = item ? nbtToStr(item.name) : "";
-        const displayName = item
-          ? (nbtToStr(item.displayName) || name.replace(/_/g, " "))
-          : "";
+        // Убираем префикс "minecraft:" из имён предметов
+        const rawName = item ? nbtToStr(item.name) : "";
+        const name = rawName.replace(/^minecraft:/, "");
+        const rawDisplay = item ? nbtToStr(item.displayName) : "";
+        const displayName = rawDisplay.replace(/^minecraft:/, "") || name.replace(/_/g, " ");
         slots.push({
           slot: i,
           name,

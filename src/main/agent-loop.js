@@ -236,12 +236,43 @@ class AgentLoop {
     setTimeout(() => this._collectDroppedItems(), 4000);
   }
 
+  // ── Подбор предметов с земли ────────────────────────────────────────
+
+  _isDroppedItem(e) {
+    if (!e || !e.position) return false;
+    const name = (e.name || e.objectType || "").toLowerCase();
+    return name === "item" || e.objectType === "Item";
+  }
+
+  async _pickupNearbyItems() {
+    const bot = this.bot;
+    if (!bot?.entity || !this._active) return;
+    if (this._combatTarget) return;
+    if (this.instance.survivorMode || this.instance.anarchyMode) return;
+
+    const pos = bot.entity.position;
+    const nearby = Object.values(bot.entities)
+      .filter(e => this._isDroppedItem(e) && e.position)
+      .map(e => ({ e, dist: pos.distanceTo(e.position) }))
+      .filter(({ dist }) => dist > 1.0 && dist < 10)
+      .sort((a, b) => a.dist - b.dist);
+
+    if (nearby.length === 0) return;
+    const { e: item } = nearby[0];
+    log.info(`[AgentLoop] Подбираю предмет с земли, dist=${nearby[0].dist.toFixed(1)}`);
+    try {
+      await bot.pathfinder.goto(
+        new goals.GoalNear(item.position.x, item.position.y, item.position.z, 1)
+      );
+    } catch {}
+  }
+
   async _collectDroppedItems() {
     const bot = this.bot;
     if (!bot?.entity || !this._active) return;
 
     const droppedItems = Object.values(bot.entities).filter((e) => {
-      if (e.type !== "object" || e.objectType !== "Item") return false;
+      if (!this._isDroppedItem(e)) return false;
       if (!this._deathPos) return true;
       return e.position?.distanceTo(this._deathPos) < 32;
     });
@@ -364,6 +395,9 @@ class AgentLoop {
         this._stuckAttempts = 0;
       }
     }
+
+    // Подбираем выпавшие предметы поблизости (только в свободном режиме)
+    await this._pickupNearbyItems();
   }
 
   async _escapeFireOrWater() {
