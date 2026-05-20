@@ -4,6 +4,14 @@
 
 const mineflayer = require("mineflayer");
 const { pathfinder, Movements, goals } = require("mineflayer-pathfinder");
+
+// Дополнительные плагины майнфлаера для комфортной игры
+let collectBlockPlugin = null;
+let pvpPlugin = null;
+let armorManagerPlugin = null;
+try { collectBlockPlugin = require("mineflayer-collectblock").plugin; } catch(e) { /* не установлен */ }
+try { pvpPlugin = require("mineflayer-pvp").plugin; } catch(e) { /* не установлен */ }
+try { armorManagerPlugin = require("mineflayer-armor-manager"); } catch(e) { /* не установлен */ }
 const { SocksProxyAgent } = require("socks-proxy-agent");
 const { HttpProxyAgent } = require("http-proxy-agent");
 const { HttpsProxyAgent } = require("https-proxy-agent");
@@ -183,6 +191,9 @@ class BotManager {
     const botId = instance.id;
 
     bot.loadPlugin(pathfinder);
+    if (collectBlockPlugin) { try { bot.loadPlugin(collectBlockPlugin); } catch {} }
+    if (pvpPlugin)          { try { bot.loadPlugin(pvpPlugin); } catch {} }
+    if (armorManagerPlugin) { try { bot.loadPlugin(armorManagerPlugin); } catch {} }
 
     bot.once("spawn", () => {
       instance.status = "online";
@@ -230,9 +241,11 @@ class BotManager {
       }
 
       const movements = new Movements(bot);
-      movements.allowSprinting = true;
+      // Отключаем спринт — основная причина "Invalid move player packet"
+      // на серверах с анти-читом (бот двигается быстрее допустимого)
+      movements.allowSprinting = false;
       movements.canDig = true;
-      movements.allow1by1towers = true;
+      movements.allow1by1towers = false; // Убираем прыжки-башни (тоже детектируются)
       bot.pathfinder.setMovements(movements);
 
       this.emit("bot:statusChanged", { botId, status: "online" });
@@ -254,8 +267,12 @@ class BotManager {
       this.emit("bot:statsUpdated", { botId, stats: instance.stats });
     });
 
+    // Throttle: обновляем координаты не чаще 1 раза в 2 секунды
+    // (physicsTick = 20 раз/сек, прямая отправка IPC перегружает канал)
+    let _tickCounter = 0;
     bot.on("physicsTick", () => {
-      if (bot.entity) {
+      _tickCounter++;
+      if (_tickCounter % 40 === 0 && bot.entity) {
         instance.stats.x = Math.round(bot.entity.position.x);
         instance.stats.y = Math.round(bot.entity.position.y);
         instance.stats.z = Math.round(bot.entity.position.z);
@@ -297,6 +314,13 @@ class BotManager {
 
       // Сообщаем лобби-хандлеру
       instance.lobbyHandler?.onChatMessage(text);
+
+      // Если сервер прислал HALTED / Invalid move — немедленно останавливаем движение
+      if (text.includes("HALTED") || text.includes("Invalid move") || text.includes("moved too quickly")) {
+        try { bot.clearControlStates(); } catch {}
+        try { bot.pathfinder.stop(); } catch {}
+        log.warn("[BotManager] Anti-cheat triggered, movement stopped for bot", botId);
+      }
     });
 
     bot.on("death", () => {
