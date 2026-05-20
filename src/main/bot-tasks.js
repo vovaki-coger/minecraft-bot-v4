@@ -62,6 +62,7 @@ class TaskManager {
         case "walk_to":      await this._taskWalkTo(args.x, args.y, args.z); break;
         case "explore":      await this._taskExplore(); break;
         case "farm_trees":   await this._taskFarmTrees(args.radius || 20, args.crop || "oak"); break;
+        case "farm_crops":   await this._taskFarmCrops(args.radius || 20, args.crop || "wheat"); break;
         case "pvp_attack":   await this._taskPvpAttack(args.target); break;
         case "inventory":    this._reportInventory(); break;
         case "status":       this._reportStatus(); break;
@@ -373,6 +374,200 @@ class TaskManager {
       e.username !== this.bot.username &&
       (!name || e.username?.toLowerCase().includes(name.toLowerCase()))
     ) || null;
+  }
+
+
+  // ══════════════════════════════════════════════════════════════════
+  // ФЕРМА КУЛЬТУР — полный автоматический цикл с костной мукой
+  // ══════════════════════════════════════════════════════════════════
+
+  async _taskFarmCrops(radius, cropType) {
+    this._log("Запускаю ферму культур: " + cropType + " радиус " + radius + "м");
+    this._chat("🌾 Ферма культур запущена: " + cropType);
+    if (!this.bot?.entity) return;
+
+    const CROPS = {
+      wheat:    { seed: "wheat_seeds",    block: "wheat",        maxAge: 7, requiredGround: "farmland" },
+      carrot:   { seed: "carrot",         block: "carrots",      maxAge: 7, requiredGround: "farmland" },
+      potato:   { seed: "potato",         block: "potatoes",     maxAge: 7, requiredGround: "farmland" },
+      beetroot: { seed: "beetroot_seeds", block: "beetroots",    maxAge: 3, requiredGround: "farmland" },
+      melon:    { seed: "melon_seeds",    block: "melon_stem",   maxAge: 7, requiredGround: "farmland" },
+      pumpkin:  { seed: "pumpkin_seeds",  block: "pumpkin_stem", maxAge: 7, requiredGround: "farmland" },
+    };
+    const crop = CROPS[cropType] || CROPS.wheat;
+
+    for (let cycle = 0; cycle < 9999 && this._running; cycle++) {
+      const pos = this.bot.entity.position.clone();
+      this._log("Цикл #" + (cycle + 1) + " pos:" + Math.round(pos.x) + "," + Math.round(pos.y) + "," + Math.round(pos.z));
+
+      // ── 1. Вспахать землю ────────────────────────────────────────
+      const hoe = this.bot.inventory.items().find(i => i.name.includes("_hoe"));
+      const farmlands = this._blocksInRadius("farmland", radius, pos);
+      if (farmlands.length < 4 && hoe) {
+        const dirtBlocks = this._blocksInRadius("dirt", Math.min(radius, 12), pos)
+          .concat(this._blocksInRadius("grass_block", Math.min(radius, 12), pos))
+          .slice(0, 30);
+        if (dirtBlocks.length > 0) {
+          await this.bot.equip(hoe, "hand").catch(() => {});
+          for (const b of dirtBlocks) {
+            if (!this._running) return;
+            await this.bot.pathfinder.goto(new goals.GoalNear(b.position.x, b.position.y, b.position.z, 2)).catch(() => {});
+            await this.bot.activateBlock(b).catch(() => {});
+            await this._sleep(150);
+          }
+        }
+      }
+
+      // ── 2. Посадить семена на пустые грядки ─────────────────────
+      const freshFarmlands = this._blocksInRadius("farmland", radius, pos);
+      if (freshFarmlands.length === 0) {
+        this._chat("⚠️ Нет farmland! Нужна вспаханная земля рядом с водой.");
+        await this._sleep(15000);
+        continue;
+      }
+
+      const seedName = crop.seed;
+      let seedItem = this.bot.inventory.items().find(i => i.name === seedName);
+      if (!seedItem && (cropType === "carrot" || cropType === "potato")) {
+        seedItem = this.bot.inventory.items().find(i => i.name === cropType);
+      }
+      if (!seedItem) {
+        this._chat("⚠️ Нет семян (" + seedName + ") в инвентаре!");
+        await this._sleep(10000);
+        continue;
+      }
+
+      let planted = 0;
+      for (const farmland of freshFarmlands) {
+        if (!this._running) return;
+        const above = this.bot.blockAt(farmland.position.offset(0, 1, 0));
+        if (!above || above.name !== "air") continue;
+
+        const s = this.bot.inventory.items().find(i =>
+          i.name === seedName || ((cropType === "carrot" || cropType === "potato") && i.name === cropType)
+        );
+        if (!s) break;
+        await this.bot.pathfinder.goto(new goals.GoalNear(farmland.position.x, farmland.position.y, farmland.position.z, 2)).catch(() => {});
+        if (!this._running) return;
+        await this.bot.equip(s, "hand").catch(() => {});
+        await this.bot.activateBlock(farmland).catch(() => {});
+        planted++;
+        await this._sleep(120);
+      }
+      if (planted > 0) this._log("Посадил " + planted + " культур");
+
+      // ── 3. Костная мука для ускорения ───────────────────────────
+      await this._applyBoneMeal(crop, radius, pos);
+
+      // ── 4. Ждём роста (проверяем каждые 15 сек, применяем бонемил) ─
+      this._log("Жду роста...");
+      for (let w = 0; w < 40 && this._running; w++) {
+        await this._sleep(15000);
+        const grown = this._findMatureCrops(crop, radius, pos);
+        if (grown.length > 0) { this._log(grown.length + " культур выросло!"); break; }
+        if (w % 3 === 0) await this._applyBoneMeal(crop, radius, pos);
+        if (w % 4 === 0) this._log("Жду... (" + w * 15 + "с)");
+      }
+
+      // ── 5. Собрать урожай ─────────────────────────────────────────
+      const harvestTargets = this._findMatureCrops(crop, radius, pos);
+      let harvested = 0;
+      for (const b of harvestTargets) {
+        if (!this._running) return;
+        await this.bot.pathfinder.goto(new goals.GoalNear(b.position.x, b.position.y, b.position.z, 2)).catch(() => {});
+        await this.bot.dig(b).catch(() => {});
+        harvested++;
+        await this._sleep(100);
+      }
+      if (harvested > 0) this._log("Собрал " + harvested + " культур!");
+      await this._sleep(1200);
+
+      // ── 6. Сложить в сундук если инвентарь полон ─────────────────
+      if (this.bot.inventory.items().length > 25) {
+        await this._depositFarmItems();
+      }
+
+      this._log("✅ Цикл " + (cycle + 1) + ": посажено=" + planted + " собрано=" + harvested);
+      await this._sleep(2000);
+    }
+    this._chat("🌾 Ферма остановлена");
+  }
+
+  // Применить костную муку к незрелым культурам
+  async _applyBoneMeal(crop, radius, pos) {
+    const bone = this.bot.inventory.items().find(i => i.name === "bone_meal");
+    if (!bone) return;
+    const unripe = this._blocksInRadius(crop.block, radius, pos).slice(0, 20);
+    await this.bot.equip(bone, "hand").catch(() => {});
+    for (const b of unripe) {
+      if (!this._running) return;
+      const age = b.metadata ?? 0;
+      if (age >= crop.maxAge) continue;
+      await this.bot.pathfinder.goto(new goals.GoalNear(b.position.x, b.position.y, b.position.z, 2)).catch(() => {});
+      for (let i = 0; i < 3; i++) {
+        const bn = this.bot.inventory.items().find(ii => ii.name === "bone_meal");
+        if (!bn) return;
+        await this.bot.equip(bn, "hand").catch(() => {});
+        await this.bot.activateBlock(b).catch(() => {});
+        await this._sleep(80);
+      }
+    }
+  }
+
+  // Найти зрелые культуры в радиусе
+  _findMatureCrops(crop, radius, pos) {
+    const r = Math.round(radius);
+    const results = [];
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dy = -3; dy <= 3; dy++) {
+          const b = this.bot.blockAt(pos.offset(dx, dy, dz));
+          if (b && b.name === crop.block && (b.metadata ?? 0) >= crop.maxAge) results.push(b);
+        }
+      }
+    }
+    return results;
+  }
+
+  // Найти блоки определённого типа в радиусе
+  _blocksInRadius(blockName, radius, pos) {
+    const r = Math.round(radius);
+    const results = [];
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dy = -4; dy <= 4; dy++) {
+          const b = this.bot.blockAt(pos.offset(dx, dy, dz));
+          if (b && b.name === blockName) results.push(b);
+        }
+      }
+    }
+    return results;
+  }
+
+  // Сложить урожай в ближайший сундук
+  async _depositFarmItems() {
+    let mcData;
+    try { mcData = require("minecraft-data")(this.bot.version); } catch { return; }
+    const chestIds = ["chest","barrel"].map(n => mcData.blocksByName[n]?.id).filter(Boolean);
+    const chestBlock = this.bot.findBlock({ matching: b => chestIds.includes(b.type), maxDistance: 24 });
+    if (!chestBlock) { this._log("Сундук не найден рядом"); return; }
+    await this.bot.pathfinder.goto(new goals.GoalNear(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z, 2)).catch(() => {});
+    try {
+      const window = await this.bot.openContainer(chestBlock);
+      await this._sleep(400);
+      const KEEP = new Set(["wooden_hoe","stone_hoe","iron_hoe","diamond_hoe","golden_hoe",
+        "wheat_seeds","carrot","potato","beetroot_seeds","melon_seeds","pumpkin_seeds","bone_meal",
+        "iron_pickaxe","diamond_pickaxe","stone_pickaxe","wooden_pickaxe"]);
+      for (const item of this.bot.inventory.items()) {
+        if (KEEP.has(item.name)) continue;
+        await window.deposit(item.type, null, item.count).catch(() => {});
+        await this._sleep(50);
+      }
+      await this.bot.closeWindow(window);
+      this._log("Сдал урожай в сундук ✅");
+    } catch (err) {
+      this._log("Ошибка сдачи в сундук: " + err.message);
+    }
   }
 
   _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
