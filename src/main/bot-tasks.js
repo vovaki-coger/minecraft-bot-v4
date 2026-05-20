@@ -684,17 +684,29 @@ class TaskManager {
     if (!chestBlock) { this._log("Сундук не найден рядом"); return; }
     await this.bot.pathfinder.goto(new goals.GoalNear(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z, 2)).catch(() => {});
     try {
-      const window = await this.bot.openContainer(chestBlock);
-      await this._sleep(400);
+      const chest = await this.bot.openContainer(chestBlock);
+      await this._sleep(500);
+
       const KEEP = new Set(["wooden_hoe","stone_hoe","iron_hoe","diamond_hoe","golden_hoe",
         "wheat_seeds","carrot","potato","beetroot_seeds","melon_seeds","pumpkin_seeds","bone_meal",
-        "iron_pickaxe","diamond_pickaxe","stone_pickaxe","wooden_pickaxe"]);
-      for (const item of this.bot.inventory.items()) {
+        "iron_pickaxe","diamond_pickaxe","stone_pickaxe","wooden_pickaxe",
+        "oak_sapling","birch_sapling","spruce_sapling","jungle_sapling","acacia_sapling","dark_oak_sapling"]);
+
+      // mineflayer 4: Window не имеет .deposit() — используем shift-click (mode=1)
+      // для перемещения предметов из инвентаря в сундук
+      const items = this.bot.inventory.items();
+      for (const item of items) {
         if (KEEP.has(item.name)) continue;
-        await window.deposit(item.type, null, item.count).catch(() => {});
-        await this._sleep(50);
+        // Проверяем, есть ли место в сундуке
+        const chestSize = chest.inventoryStart != null ? chest.inventoryStart : 27;
+        const hasSpace = chest.slots.slice(0, chestSize).some(s => !s || s.type === -1 || s.type === item.type);
+        if (!hasSpace) break;
+        // shift+click переносит стак из инвентаря в контейнер
+        await this.bot.clickWindow(item.slot, 0, 1).catch(() => {});
+        await this._sleep(60);
       }
-      await this.bot.closeWindow(window);
+
+      await this.bot.closeWindow(chest);
       this._log("Сдал урожай в сундук ✅");
     } catch (err) {
       this._log("Ошибка сдачи в сундук: " + err.message);
