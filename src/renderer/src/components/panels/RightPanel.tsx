@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { BotState, ChatMessage } from "../../store/appStore";
 
 interface Props {
@@ -14,33 +14,17 @@ export default function RightPanel({ bot }: Props) {
   const [autoResponse, setAutoResponse] = useState(false);
   const [lobbyLoading, setLobbyLoading] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const aiChatContainerRef = useRef<HTMLDivElement>(null);
-  const mcPrevLen = useRef(0);
-  const aiPrevLen = useRef(0);
-
-  const scrollToBottom = useCallback((
-    ref: React.RefObject<HTMLDivElement | null>,
-    prevLen: React.MutableRefObject<number>,
-    newLen: number,
-  ) => {
-    const el = ref.current;
-    if (!el) return;
-    const isFirstLoad = prevLen.current === 0 && newLen > 0;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const isNearBottom = distFromBottom < 120;
-    if (isFirstLoad || isNearBottom) {
-      el.scrollTop = el.scrollHeight;
-    }
-    prevLen.current = newLen;
-  }, []);
+  const aiContainerRef   = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    scrollToBottom(chatContainerRef, mcPrevLen, bot?.chatHistory?.length ?? 0);
-  }, [bot?.chatHistory, scrollToBottom]);
+    const el = chatContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [bot?.chatHistory]);
 
   useEffect(() => {
-    scrollToBottom(aiChatContainerRef, aiPrevLen, bot?.aiChatHistory?.length ?? 0);
-  }, [bot?.aiChatHistory, scrollToBottom]);
+    const el = aiContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [bot?.aiChatHistory]);
 
   useEffect(() => {
     if (bot) {
@@ -115,7 +99,7 @@ export default function RightPanel({ bot }: Props) {
   const aiMessages = bot?.aiChatHistory || [];
 
   return (
-    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320, overflow: "hidden", minHeight: 0 }}>
+    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320 }}>
       {/* Tabs */}
       <div className="flex border-b" style={{ borderColor: "#3a3a3a" }}>
         <button
@@ -228,7 +212,7 @@ export default function RightPanel({ bot }: Props) {
           </div>
 
           <div
-            ref={aiChatContainerRef}
+            ref={aiContainerRef}
             className="flex-1 overflow-y-auto p-2"
             style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5 }}
           >
