@@ -13,6 +13,7 @@
 
 const { goals, Movements } = require("mineflayer-pathfinder");
 const log = require("electron-log");
+const { safeDig, safeGoto, smoothLookAt, randomHitboxPoint, randInt, sleep: acSleep } = require("./anticheat-bypass");
 
 const SURVIVOR_STAGES = [
   "wood_gathering",
@@ -381,7 +382,8 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
     if (!blockType) { this._log("Не знаю блок: " + blockName); return false; }
     const block = bot.findBlock({ matching: blockType.id, maxDistance: 64 });
     if (!block) { this._log("Не нашёл " + blockName + " рядом"); return false; }
-    await bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 3)).catch(() => {});
+    await safeGoto(bot, this.instance,
+      new goals.GoalNear(block.position.x, block.position.y, block.position.z, 3), 15000);
     return true;
   }
 
@@ -396,13 +398,10 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
     for (const id of candidates) {
       const block = bot.findBlock({ matching: id, maxDistance: searchRadius });
       if (block) {
-        await bot.pathfinder.goto(
-          new goals.GoalBlock(block.position.x, block.position.y, block.position.z)
-        ).catch(() => {});
-        await this._sleep(200);
-        const refreshed = bot.blockAt(block.position);
-        if (refreshed && refreshed.name !== "air") {
-          await bot.dig(refreshed).catch(() => {});
+        await safeGoto(bot, this.instance,
+          new goals.GoalBlock(block.position.x, block.position.y, block.position.z), 15000);
+        const didDig = await safeDig(bot, block);
+        if (didDig) {
           this._failCounts = {};
           return true;
         }
@@ -415,9 +414,8 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
       const attempt = this._getFailCount(failKey) || 0;
       const angle = (attempt / 8) * Math.PI * 2;
       const dist = 40 + attempt * 25;
-      await bot.pathfinder.goto(new goals.GoalNear(
-        pos.x + Math.cos(angle) * dist, pos.y, pos.z + Math.sin(angle) * dist, 4
-      )).catch(() => {});
+      await safeGoto(bot, this.instance,
+        new goals.GoalNear(pos.x + Math.cos(angle) * dist, pos.y, pos.z + Math.sin(angle) * dist, 4), 20000);
     }
     return false;
   }
@@ -436,8 +434,13 @@ ${STAGE_GOALS[SURVIVOR_STAGES[this.currentStage]] || "Продолжай игр�
     if (!entityName) return false;
     const entity = this._findEntity(bot, entityName, 24);
     if (!entity) { this._log("Не вижу " + entityName + " рядом"); return false; }
-    await bot.pathfinder.goto(new goals.GoalFollow(entity, 2)).catch(() => {});
-    if (entity.isValid) bot.attack(entity);
+    await safeGoto(bot, this.instance, new goals.GoalFollow(entity, 2), 8000);
+    if (entity.isValid) {
+      const aimAt = randomHitboxPoint(entity) || entity.position.offset(0, (entity.height || 1.8) * 0.85, 0);
+      await smoothLookAt(bot, aimAt).catch(() => {});
+      await acSleep(randInt(40, 80));
+      bot.attack(entity);
+    }
     return true;
   }
 

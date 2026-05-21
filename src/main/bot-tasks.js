@@ -5,6 +5,7 @@
 const { goals } = require("mineflayer-pathfinder");
 const log = require("electron-log");
 const Vec3 = require("vec3");
+const { safeDig, safeGoto, smoothLookAt, randInt, sleep: acSleep } = require("./anticheat-bypass");
 
 class TaskManager {
   constructor(botInstance, emit) {
@@ -130,26 +131,22 @@ class TaskManager {
         const pos = this.bot.entity.position;
         const angle = (exploreAttempts / 8) * Math.PI * 2;
         const dist = 40 + exploreAttempts * 20;
-        await this.bot.pathfinder.goto(new goals.GoalNear(
-          pos.x + Math.cos(angle) * dist, pos.y, pos.z + Math.sin(angle) * dist, 4
-        )).catch(() => {});
+        await safeGoto(this.bot, this.instance,
+          new goals.GoalNear(pos.x + Math.cos(angle) * dist, pos.y, pos.z + Math.sin(angle) * dist, 4), 20000);
         searchRadius = Math.min(searchRadius + 32, 192);
         exploreAttempts++;
         continue;
       }
 
       exploreAttempts = 0;
-      // Идём к блоку и сразу ищем следующий
-      await this.bot.pathfinder.goto(
-        new goals.GoalNear(block.position.x, block.position.y, block.position.z, 2)
-      ).catch(() => {});
+      await safeGoto(this.bot, this.instance,
+        new goals.GoalNear(block.position.x, block.position.y, block.position.z, 2), 15000);
       if (!this._running) break;
-      const refreshed = this.bot.blockAt(block.position);
-      if (refreshed && refreshed.name !== "air") {
-        await this.bot.dig(refreshed).catch(() => {});
+      const didDig = await safeDig(this.bot, block);
+      if (didDig) {
         collected++;
+        if (collected % 5 === 0) this._log("Собрано " + collected + "/" + count + " бревён");
       }
-      if (collected % 5 === 0) this._log("Собрано " + collected + "/" + count + " бревён");
     }
     this._chat("Готово! Собрал " + collected + " бревён");
   }
@@ -163,12 +160,11 @@ class TaskManager {
     while (this._running && collected < count) {
       const block = this.bot.findBlock({ matching: blockType.id, maxDistance: 32 });
       if (!block) { this._chat("Не нашёл рядом!"); break; }
-      await this.bot.pathfinder.goto(
-        new goals.GoalBlock(block.position.x, block.position.y, block.position.z)
-      ).catch(() => {});
+      await safeGoto(this.bot, this.instance,
+        new goals.GoalBlock(block.position.x, block.position.y, block.position.z), 15000);
       if (!this._running) break;
-      await this.bot.dig(block).catch(() => {});
-      collected++;
+      const didDig = await safeDig(this.bot, block);
+      if (didDig) collected++;
     }
     this._chat("Добыл " + collected + " " + blockName);
   }
@@ -440,10 +436,11 @@ class TaskManager {
         for (const lb of stem) {
           if (!this._running) return;
           if (this.bot.entity.position.distanceTo(lb.position) > 4) {
-            await this.bot.pathfinder.goto(new goals.GoalNear(lb.position.x, lb.position.y, lb.position.z, 2)).catch(() => {});
+            await safeGoto(this.bot, this.instance,
+              new goals.GoalNear(lb.position.x, lb.position.y, lb.position.z, 2), 12000);
           }
-          await this.bot.dig(lb).catch(() => {});
-          await this._sleep(80);
+          await safeDig(this.bot, lb);
+          await this._sleep(randInt(70, 110));
         }
         chopCount += stem.length;
         totalChopped += stem.length;

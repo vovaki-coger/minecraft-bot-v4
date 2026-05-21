@@ -25,6 +25,7 @@ const { AgentLoop } = require("./agent-loop");
 const { AIBrain } = require("./ai-brain");
 const { AnarchyProtocol } = require("./anarchy-protocol");
 const { LobbyHandler } = require("./lobby-handler");
+const { initAnticheatBypass, smoothLookAt, randomHitboxPoint } = require("./anticheat-bypass");
 
 const RUSSIAN_OVERRIDE = `ВАЖНО: Ты общаешься НА РУССКОМ ЯЗЫКЕ. Все твои ответы должны быть на русском. `;
 
@@ -345,15 +346,8 @@ class BotManager {
       try { movements.scaffoldingBlocks = []; } catch {}  // не строить scaffolding
       bot.pathfinder.setMovements(movements);
 
-      // forcedMove = сервер поправил позицию (телепорт/спавн/портал).
-      // НЕ ставим кулдаун здесь — это слишком агрессивно и вызывает "полёт".
-      // Rubber-band обрабатывается через паттерны в событии "message" ниже.
-      bot.on("forcedMove", () => {
-        try { bot.clearControlStates(); } catch {}
-        try { bot.setControlState("jump",   false); } catch {}
-        try { bot.setControlState("sprint", false); } catch {}
-        // Если уже есть активный кулдаун — не перезаписываем, иначе только очищаем состояния
-      });
+      // Инициализируем античит-модуль: патч пакетов, спринта, forcedMove
+      initAnticheatBypass(bot, instance);
 
       
       // ── Самооборона ──────────────────────────────────────────────────
@@ -384,20 +378,22 @@ class BotManager {
             if (dist < minDist) { minDist = dist; attacker = e; }
           }
           if (attacker?.isValid) {
-            try { bot.lookAt(attacker.position.offset(0, (attacker.height||1.8)*0.85, 0)); } catch {}
+            const aimTarget = randomHitboxPoint(attacker) || attacker.position.offset(0, (attacker.height||1.8)*0.85, 0);
+            smoothLookAt(bot, aimTarget).catch(() => {});
             this.emit("bot:alert", { botId, type: "attacked", title: "⚔️ Бот атакован!", message: "Ник: " + instance.config.nick + " | Атакует: " + (attacker.username||attacker.displayName||attacker.name||"моб") });
-            // Автооборона: преследуем и атакуем несколько тиков
+            // Автооборона: плавный поворот + атака с рандомным CPS (8–14)
             const runDefense = () => {
               let ticks = 0;
               const iv = setInterval(() => {
                 ticks++;
                 if (ticks > 15 || !attacker?.isValid || !bot?.entity) { clearInterval(iv); return; }
                 try {
-                  bot.lookAt(attacker.position.offset(0, (attacker.height||1.8)*0.85, 0));
+                  const pt = randomHitboxPoint(attacker) || attacker.position.offset(0, (attacker.height||1.8)*0.85, 0);
+                  smoothLookAt(bot, pt, true).catch(() => {});
                   if (bot.pvp) bot.pvp.attack(attacker);
                   else bot.attack(attacker);
                 } catch { clearInterval(iv); }
-              }, 400);
+              }, 1000 / (8 + Math.floor(Math.random() * 7)));
             };
             runDefense();
           }
