@@ -828,11 +828,17 @@ class TaskManager {
     if (!this._running) return;
     // Лёгкий случайный джиттер (0–jitterMs мс) для большей естественности
     if (jitterMs > 0) await this._sleep(Math.floor(Math.random() * jitterMs));
+    // Ждём приземления перед движением — Grim/Matrix проверяют onGround
+    if (this.bot.entity && !this.bot.entity.onGround) {
+      for (let i = 0; i < 10; i++) {
+        await this._sleep(50);
+        if (this.bot.entity.onGround) break;
+      }
+    }
     await this.bot.pathfinder.goto(goal).catch(() => {});
-    // Ждём 3 игровых тика после прибытия — сервер должен принять позицию.
-    // Это предотвращает rubber-band и срабатывание "moved too quickly".
+    // Ждём 3 тика после прибытия — сервер обрабатывает позицию до следующего движения
     try { await this.bot.waitForTicks(3); } catch {}
-    await this._sleep(50 + Math.floor(Math.random() * 100));
+    await this._sleep(60 + Math.floor(Math.random() * 80));
   }
 }
 

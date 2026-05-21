@@ -9,18 +9,18 @@ type ChatTab = "minecraft" | "ai";
 
 function useChatScroll(dep: unknown) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const userScrolledUp = useRef(false);
-  const [hasNewMsg, setHasNewMsg] = useState(false);
+  const pinnedToBottom = useRef(true);
+  const [hasNew, setHasNew] = useState(false);
 
   const onScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distFromBottom < 40) {
-      userScrolledUp.current = false;
-      setHasNewMsg(false);
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (dist < 30) {
+      pinnedToBottom.current = true;
+      setHasNew(false);
     } else {
-      userScrolledUp.current = true;
+      pinnedToBottom.current = false;
     }
   }, []);
 
@@ -32,12 +32,13 @@ function useChatScroll(dep: unknown) {
   }, [onScroll]);
 
   useEffect(() => {
-    if (!userScrolledUp.current) {
-      const el = containerRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-      setHasNewMsg(false);
+    const el = containerRef.current;
+    if (!el) return;
+    if (pinnedToBottom.current) {
+      el.scrollTop = el.scrollHeight;
+      setHasNew(false);
     } else {
-      setHasNewMsg(true);
+      setHasNew(true);
     }
   }, [dep]);
 
@@ -45,34 +46,106 @@ function useChatScroll(dep: unknown) {
     const el = containerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-    userScrolledUp.current = false;
-    setHasNewMsg(false);
+    pinnedToBottom.current = true;
+    setHasNew(false);
   }, []);
 
-  return { containerRef, hasNewMsg, scrollToBottom };
+  return { containerRef, hasNew, scrollToBottom };
+}
+
+function getMsgColor(type: ChatMessage["type"]) {
+  switch (type) {
+    case "user":     return "#7fb3d3";
+    case "player":   return "#e8e8e8";
+    case "bot":      return "#7ecc49";
+    case "ai":       return "#c084fc";
+    case "system":   return "#888888";
+    case "server":   return "#bdc3c7";
+    case "survivor": return "#f59e0b";
+    default:         return "#e8e8e8";
+  }
+}
+
+function formatTime(ts: number) {
+  const d = new Date(ts);
+  return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+}
+
+const CHAT_TYPES: ChatMessage["type"][] = ["player", "user", "bot", "ai", "server"];
+const LOG_TYPES:  ChatMessage["type"][] = ["system", "survivor"];
+
+function ScrollArea({
+  msgs, scroll, fontSize = 11, emptyText,
+}: {
+  msgs: ChatMessage[];
+  scroll: ReturnType<typeof useChatScroll>;
+  fontSize?: number;
+  emptyText: string;
+}) {
+  return (
+    <div style={{ flex: 1, position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div
+        ref={scroll.containerRef}
+        style={{
+          flex: 1, overflowY: "auto", overflowX: "hidden",
+          padding: "4px 8px", minHeight: 0,
+          fontFamily: "'Courier New', monospace",
+          fontSize, lineHeight: 1.45,
+        }}
+      >
+        {msgs.length === 0 ? (
+          <div style={{ color: "#444", textAlign: "center", marginTop: 12, fontSize: 10 }}>{emptyText}</div>
+        ) : (
+          msgs.map((m, i) => (
+            <div key={i} style={{ marginBottom: 1, wordBreak: "break-word" }}>
+              <span style={{ color: "#3a4a5a", marginRight: 4 }}>[{formatTime(m.timestamp)}]</span>
+              <span style={{ color: getMsgColor(m.type) }}>{m.text}</span>
+            </div>
+          ))
+        )}
+      </div>
+      {scroll.hasNew && (
+        <button
+          onClick={scroll.scrollToBottom}
+          style={{
+            position: "absolute", bottom: 4, left: "50%", transform: "translateX(-50%)",
+            background: "rgba(30,40,60,0.9)", border: "1px solid rgba(0,200,255,.4)",
+            borderRadius: 10, padding: "2px 10px", cursor: "pointer",
+            color: "#00c8ff", fontSize: 10, fontFamily: "monospace",
+            zIndex: 10, whiteSpace: "nowrap", boxShadow: "0 1px 6px rgba(0,0,0,.6)",
+          }}
+        >
+          ↓ новые
+        </button>
+      )}
+    </div>
+  );
 }
 
 export default function RightPanel({ bot }: Props) {
-  const [input, setInput] = useState("");
-  const [aiInput, setAiInput] = useState("");
+  const [input, setInput]         = useState("");
+  const [aiInput, setAiInput]     = useState("");
   const [activeTab, setActiveTab] = useState<ChatTab>("minecraft");
   const [autoResponse, setAutoResponse] = useState(false);
   const [lobbyLoading, setLobbyLoading] = useState(false);
 
-  const mc = useChatScroll(bot?.chatHistory?.length);
-  const ai = useChatScroll(bot?.aiChatHistory?.length);
+  const allMsgs  = bot?.chatHistory    || [];
+  const aiMsgs   = bot?.aiChatHistory  || [];
+
+  const chatMsgs = allMsgs.filter(m => CHAT_TYPES.includes(m.type));
+  const logMsgs  = allMsgs.filter(m => LOG_TYPES.includes(m.type));
+
+  const chatScroll = useChatScroll(chatMsgs.length);
+  const logScroll  = useChatScroll(logMsgs.length);
+  const aiScroll   = useChatScroll(aiMsgs.length);
 
   useEffect(() => {
-    if (bot) {
-      setAutoResponse(!!(bot.config as any).autoResponse);
-    }
+    if (bot) setAutoResponse(!!(bot.config as any).autoResponse);
   }, [bot?.id]);
 
   async function handleAutoResponseToggle(checked: boolean) {
     setAutoResponse(checked);
-    if (bot) {
-      await window.electronAPI.bot.updateConfig(bot.id, { autoResponse: checked });
-    }
+    if (bot) await window.electronAPI.bot.updateConfig(bot.id, { autoResponse: checked });
   }
 
   async function handleSendMinecraft() {
@@ -90,163 +163,113 @@ export default function RightPanel({ bot }: Props) {
   async function handleTriggerLobby() {
     if (!bot) return;
     setLobbyLoading(true);
-    try {
-      await window.electronAPI.bot.triggerLobby(bot.id);
-    } catch {}
+    try { await window.electronAPI.bot.triggerLobby(bot.id); } catch {}
     setLobbyLoading(false);
   }
 
   function handleKeyDown(e: React.KeyboardEvent, sender: "mc" | "ai") {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (sender === "mc") handleSendMinecraft();
-      else handleSendAI();
+      sender === "mc" ? handleSendMinecraft() : handleSendAI();
     }
   }
-
-  function getMsgColor(type: ChatMessage["type"]) {
-    switch (type) {
-      case "user":     return "#7fb3d3";
-      case "player":   return "#e8e8e8";
-      case "bot":      return "#7ecc49";
-      case "ai":       return "#c084fc";
-      case "system":   return "#888888";
-      case "server":   return "#bdc3c7";
-      case "survivor": return "#e67e22";
-      default:         return "#e8e8e8";
-    }
-  }
-
-  function getAIMsgColor(type: ChatMessage["type"]) {
-    switch (type) {
-      case "user":   return "#7fb3d3";
-      case "ai":     return "#c084fc";
-      case "system": return "#888888";
-      default:       return "#e8e8e8";
-    }
-  }
-
-  function formatTime(ts: number) {
-    const d = new Date(ts);
-    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-  }
-
-  const mcMessages = bot?.chatHistory || [];
-  const aiMessages = bot?.aiChatHistory || [];
 
   return (
-    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320, overflow: "hidden", minHeight: 0, alignSelf: "stretch" }}>
-      {/* Tabs */}
-      <div className="flex border-b flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
-        <button
-          onClick={() => setActiveTab("minecraft")}
-          className="flex-1 text-xs py-1.5 font-mono transition-colors"
-          style={{
-            color: activeTab === "minecraft" ? "#7ecc49" : "#666",
-            borderBottom: activeTab === "minecraft" ? "2px solid #7ecc49" : "2px solid transparent",
-            background: "none",
-          }}
-        >
-          ⛏ Minecraft
-        </button>
-        <button
-          onClick={() => setActiveTab("ai")}
-          className="flex-1 text-xs py-1.5 font-mono transition-colors"
-          style={{
-            color: activeTab === "ai" ? "#c084fc" : "#666",
-            borderBottom: activeTab === "ai" ? "2px solid #c084fc" : "2px solid transparent",
-            background: "none",
-          }}
-        >
-          🤖 ИИ-чат
-        </button>
+    <div
+      className="panel"
+      style={{
+        width: 320, flexShrink: 0,
+        display: "flex", flexDirection: "column",
+        overflow: "hidden", minHeight: 0,
+      }}
+    >
+      {/* ── Tabs ───────────────────────────────────────────────── */}
+      <div style={{ display: "flex", borderBottom: "1px solid #2a2a2a", flexShrink: 0 }}>
+        {(["minecraft", "ai"] as ChatTab[]).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              flex: 1, fontSize: 11, padding: "5px 0", fontFamily: "monospace",
+              background: "none", cursor: "pointer",
+              color: activeTab === tab ? (tab === "minecraft" ? "#7ecc49" : "#c084fc") : "#555",
+              borderBottom: activeTab === tab
+                ? `2px solid ${tab === "minecraft" ? "#7ecc49" : "#c084fc"}`
+                : "2px solid transparent",
+            }}
+          >
+            {tab === "minecraft" ? "⛏ Minecraft" : "🤖 ИИ-чат"}
+          </button>
+        ))}
       </div>
 
-      {/* Minecraft Chat Tab */}
+      {/* ── Minecraft tab ─────────────────────────────────────── */}
       {activeTab === "minecraft" && (
         <>
+          {/* Header */}
           <div
-            className="flex items-center justify-between px-3 py-1.5 border-b flex-shrink-0"
-            style={{ borderColor: "#3a3a3a" }}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "4px 10px", borderBottom: "1px solid #2a2a2a", flexShrink: 0,
+            }}
           >
-            <span className="text-xs font-mono" style={{ color: "#888" }}>
-              {bot?.status === "online" ? "Игровой чат" : "Оффлайн"}
+            <span style={{ fontSize: 10, color: "#555", fontFamily: "monospace" }}>
+              {bot?.status === "online" ? "В сети" : "Оффлайн"}
             </span>
-            <div className="flex items-center gap-2">
-              <label
-                className="flex items-center gap-1.5 text-xs cursor-pointer"
-                style={{ color: autoResponse ? "#7ecc49" : "#888" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={autoResponse}
-                  onChange={(e) => handleAutoResponseToggle(e.target.checked)}
-                  style={{ accentColor: "#7ecc49" }}
-                />
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, cursor: "pointer", color: autoResponse ? "#7ecc49" : "#555" }}>
+                <input type="checkbox" checked={autoResponse} onChange={e => handleAutoResponseToggle(e.target.checked)} style={{ accentColor: "#7ecc49" }} />
                 Автоответ
               </label>
               <button
-                className="btn text-xs px-1.5 py-0.5"
-                onClick={handleTriggerLobby}
+                className="btn" onClick={handleTriggerLobby}
                 disabled={!bot || bot.status !== "online" || lobbyLoading}
-                title="Выбрать анку/ранг в лобби"
-                style={{ fontSize: 10 }}
+                style={{ fontSize: 9, padding: "2px 6px" }}
               >
                 {lobbyLoading ? "⏳" : "🏠 Анка"}
               </button>
             </div>
           </div>
 
-          <div style={{ flex: 1, position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div
-              ref={mc.containerRef}
-              className="flex-1 overflow-y-auto p-2"
-              style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
-            >
-              {mcMessages.length === 0 ? (
-                <div className="text-center mt-8" style={{ color: "#555" }}>
-                  {bot ? "Сообщений нет" : "Выберите бота"}
-                </div>
-              ) : (
-                mcMessages.map((msg, i) => (
-                  <div key={i} className="mb-0.5">
-                    <span style={{ color: "#555", marginRight: 4 }}>[{formatTime(msg.timestamp)}]</span>
-                    <span style={{ color: getMsgColor(msg.type) }}>{msg.text}</span>
-                  </div>
-                ))
-              )}
+          {/* ── Game chat section (flex:2) ── */}
+          <div style={{ flex: 2, display: "flex", flexDirection: "column", minHeight: 0, borderBottom: "1px solid #1e1e1e" }}>
+            <div style={{ padding: "2px 8px", fontSize: 9, color: "#3a5a3a", flexShrink: 0, letterSpacing: 1 }}>
+              💬 ЧАТ
             </div>
-            {mc.hasNewMsg && (
-              <button
-                onClick={mc.scrollToBottom}
-                style={{
-                  position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)",
-                  background: "rgba(126,204,73,0.15)", border: "1px solid rgba(126,204,73,0.5)",
-                  borderRadius: 12, padding: "3px 12px", cursor: "pointer",
-                  color: "#7ecc49", fontSize: 11, fontFamily: "monospace",
-                  zIndex: 10, whiteSpace: "nowrap",
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
-                }}
-              >
-                ↓ новые сообщения
-              </button>
-            )}
+            <ScrollArea
+              msgs={chatMsgs}
+              scroll={chatScroll}
+              fontSize={11}
+              emptyText={bot ? "Сообщений нет" : "Выберите бота"}
+            />
           </div>
 
-          <div className="p-2 border-t flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
-            <div className="flex gap-1">
+          {/* ── Bot log section (flex:1) ── */}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, borderBottom: "1px solid #1e1e1e" }}>
+            <div style={{ padding: "2px 8px", fontSize: 9, color: "#5a4a1e", flexShrink: 0, letterSpacing: 1 }}>
+              📋 ЛОГ БОТА
+            </div>
+            <ScrollArea
+              msgs={logMsgs}
+              scroll={logScroll}
+              fontSize={10}
+              emptyText="Лог пуст"
+            />
+          </div>
+
+          {/* Input */}
+          <div style={{ padding: "6px 8px", borderTop: "1px solid #2a2a2a", flexShrink: 0 }}>
+            <div style={{ display: "flex", gap: 4 }}>
               <input
-                className="input flex-1 text-xs"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => handleKeyDown(e, "mc")}
-                placeholder={bot?.status === "online" ? "Написать в Minecraft чат..." : "Спросить у ИИ..."}
+                className="input" style={{ flex: 1, fontSize: 11 }}
+                value={input} onChange={e => setInput(e.target.value)}
+                onKeyDown={e => handleKeyDown(e, "mc")}
+                placeholder={bot?.status === "online" ? "Написать в чат..." : "Нет подключения"}
                 disabled={!bot}
               />
               <button
-                className="btn btn-primary text-xs px-3"
-                onClick={handleSendMinecraft}
-                disabled={!bot || !input.trim()}
+                className="btn btn-primary" style={{ fontSize: 11, padding: "0 10px" }}
+                onClick={handleSendMinecraft} disabled={!bot || !input.trim()}
               >
                 ➤
               </button>
@@ -255,81 +278,34 @@ export default function RightPanel({ bot }: Props) {
         </>
       )}
 
-      {/* AI-only Chat Tab */}
+      {/* ── AI-only tab ────────────────────────────────────────── */}
       {activeTab === "ai" && (
         <>
-          <div className="px-3 py-1.5 border-b flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
-            <p className="text-xs" style={{ color: "#888" }}>
-              Приватный разговор с ИИ — не пишет в Minecraft чат
-            </p>
+          <div style={{ padding: "4px 10px", borderBottom: "1px solid #2a2a2a", flexShrink: 0 }}>
+            <p style={{ fontSize: 10, color: "#555" }}>Приватный разговор с ИИ — не пишет в игру</p>
           </div>
 
-          <div style={{ flex: 1, position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div
-              ref={ai.containerRef}
-              className="flex-1 overflow-y-auto p-2"
-              style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
-            >
-              {aiMessages.length === 0 ? (
-                <div className="text-center mt-8" style={{ color: "#555" }}>
-                  {bot ? (
-                    <>
-                      <p>ИИ-чат пуст</p>
-                      <p className="mt-1 text-xs" style={{ color: "#444" }}>Сообщения здесь не видны в игре</p>
-                    </>
-                  ) : "Выберите бота"}
-                </div>
-              ) : (
-                aiMessages.map((msg, i) => (
-                  <div key={i} className="mb-1">
-                    <span style={{ color: "#555", marginRight: 4 }}>[{formatTime(msg.timestamp)}]</span>
-                    <span style={{ color: "#888", marginRight: 4 }}>
-                      {msg.type === "user" ? "[Вы]" : msg.type === "ai" ? "[ИИ]" : "[Сис]"}
-                    </span>
-                    <span style={{ color: getAIMsgColor(msg.type) }}>{msg.text}</span>
-                  </div>
-                ))
-              )}
-            </div>
-            {ai.hasNewMsg && (
-              <button
-                onClick={ai.scrollToBottom}
-                style={{
-                  position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)",
-                  background: "rgba(192,132,252,0.15)", border: "1px solid rgba(192,132,252,0.5)",
-                  borderRadius: 12, padding: "3px 12px", cursor: "pointer",
-                  color: "#c084fc", fontSize: 11, fontFamily: "monospace",
-                  zIndex: 10, whiteSpace: "nowrap",
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
-                }}
-              >
-                ↓ новые сообщения
-              </button>
-            )}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <ScrollArea msgs={aiMsgs} scroll={aiScroll} fontSize={11} emptyText={bot ? "ИИ-чат пуст" : "Выберите бота"} />
           </div>
 
-          <div className="p-2 border-t flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
-            <div className="flex gap-1">
+          <div style={{ padding: "6px 8px", borderTop: "1px solid #2a2a2a", flexShrink: 0 }}>
+            <div style={{ display: "flex", gap: 4 }}>
               <input
-                className="input flex-1 text-xs"
-                value={aiInput}
-                onChange={(e) => setAiInput(e.target.value)}
-                onKeyDown={(e) => handleKeyDown(e, "ai")}
-                placeholder="Спросить у ИИ (не попадёт в игру)..."
+                className="input" style={{ flex: 1, fontSize: 11 }}
+                value={aiInput} onChange={e => setAiInput(e.target.value)}
+                onKeyDown={e => handleKeyDown(e, "ai")}
+                placeholder="Спросить у ИИ..."
                 disabled={!bot}
               />
               <button
-                className="btn text-xs px-3"
-                onClick={handleSendAI}
-                disabled={!bot || !aiInput.trim()}
-                style={{ borderColor: "#7c3aed", color: "#c084fc" }}
+                className="btn" style={{ fontSize: 11, padding: "0 10px", borderColor: "#7c3aed", color: "#c084fc" }}
+                onClick={handleSendAI} disabled={!bot || !aiInput.trim()}
               >
                 ➤
               </button>
             </div>
-            <p className="text-xs mt-1" style={{ color: "#444" }}>
-              🔒 Только между вами и ИИ
-            </p>
+            <p style={{ fontSize: 10, color: "#333", marginTop: 4 }}>🔒 Только между вами и ИИ</p>
           </div>
         </>
       )}

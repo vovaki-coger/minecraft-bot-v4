@@ -339,10 +339,9 @@ class BotManager {
       movements.allow1by1towers = false;     // не строить башни
       movements.allowParkour = false;        // паркур = читерство для большинства античитов
       movements.canOpenDoors = true;
-      try { movements.maxDropDown = 1; } catch {}   // максимум 1 блок вниз (было 2)
-      try { movements.liquidCost = 200; } catch {}  // избегать воды/лавы
-      try { movements.waterCost = 200; } catch {}
-      try { movements.allowFreeMotion = false; } catch {} // только наземное движение
+      try { movements.maxDropDown = 3; } catch {}   // до 3 блоков вниз (1 было слишком мало)
+      try { movements.liquidCost = 100; } catch {}
+      try { movements.waterCost = 100; } catch {}
       try { movements.scaffoldingBlocks = []; } catch {}  // не строить scaffolding
       bot.pathfinder.setMovements(movements);
 

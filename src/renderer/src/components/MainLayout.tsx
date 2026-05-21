@@ -14,7 +14,7 @@ export default function MainLayout() {
     <div className="flex flex-col w-full h-full" style={{ background: "#1a1a1a" }}>
       <TopBar />
       <BotTabs />
-      <div className="flex flex-1 gap-1 overflow-hidden p-1" style={{ minHeight: 0 }}>
+      <div style={{ display: "flex", flex: 1, gap: 4, overflow: "hidden", padding: 4, minHeight: 0 }}>
         <LeftPanel />
         <CenterPanel bot={selectedBot} />
         <RightPanel bot={selectedBot} />
