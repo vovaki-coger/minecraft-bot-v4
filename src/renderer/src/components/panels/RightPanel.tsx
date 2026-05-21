@@ -135,7 +135,7 @@ export default function RightPanel({ bot }: Props) {
   const aiMessages = bot?.aiChatHistory || [];
 
   return (
-    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320, overflow: "hidden" }}>
+    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320, overflow: "hidden", minHeight: 0, height: "100%" }}>
       {/* Tabs */}
       <div className="flex border-b flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
         <button

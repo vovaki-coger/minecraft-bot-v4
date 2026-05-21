@@ -255,15 +255,25 @@ class BotManager {
       }
 
       const movements = new Movements(bot);
-      movements.allowSprinting = false;
-      movements.canDig = false;          // не копать при обходе — подозрительно для античита
-      movements.allow1by1towers = false;
-      movements.allowParkour = false;    // паркур = читерство для большинства античитов
+      movements.allowSprinting = false;      // спринт — главный триггер "moved too quickly"
+      movements.canDig = false;              // не копать при обходе
+      movements.allow1by1towers = false;     // не строить башни
+      movements.allowParkour = false;        // паркур = читерство для большинства античитов
       movements.canOpenDoors = true;
-      try { movements.maxDropDown = 2; } catch {}  // не прыгать с большой высоты
-      try { movements.liquidCost = 100; } catch {}
-      try { movements.waterCost = 100; } catch {}
+      try { movements.maxDropDown = 1; } catch {}   // максимум 1 блок вниз (было 2)
+      try { movements.liquidCost = 200; } catch {}  // избегать воды/лавы
+      try { movements.waterCost = 200; } catch {}
+      try { movements.allowFreeMotion = false; } catch {} // только наземное движение
+      try { movements.scaffoldingBlocks = []; } catch {}  // не строить scaffolding
       bot.pathfinder.setMovements(movements);
+
+      // Когда сервер принудительно телепортирует бота (rubber-band) — останавливаем pathfinder
+      bot.on("forcedMove", () => {
+        try { bot.pathfinder.stop(); } catch {}
+        try { bot.clearControlStates(); } catch {}
+        instance._antiCheatCooldownUntil = Date.now() + 4000;
+        log.warn("[BotManager] forcedMove (rubber-band) — 4s cooldown for bot", botId);
+      });
 
       
       // ── Самооборона ──────────────────────────────────────────────────
@@ -403,17 +413,21 @@ class BotManager {
         "HALTED", "Invalid move", "moved too quickly", "Moved wrongly",
         "You moved too fast", "illegal move", "Illegal stance",
         "нарушение", "читер", "подозрительное движение",
+        "Setback", "setback", "disallowed movement", "CombatLog",
+        "Blink", "Speed", "NoFall", "badPackets", "violation",
+        "был остановлен", "suspicious", "kicked for flying",
       ];
       if (ANTICHEAT_PATTERNS.some(p => text.toLowerCase().includes(p.toLowerCase()))) {
         try { bot.clearControlStates(); } catch {}
         try { bot.pathfinder.stop(); } catch {}
-        // Кулдаун: запрещаем движение на 3 секунды, потом разрешаем снова
-        instance._antiCheatCooldownUntil = Date.now() + 3000;
-        log.warn("[BotManager] Anti-cheat triggered, 3s cooldown for bot", botId);
+        // Кулдаун 5 секунд (было 3) + сбрасываем снизу
+        const coolMs = 5000;
+        instance._antiCheatCooldownUntil = Date.now() + coolMs;
+        log.warn("[BotManager] Anti-cheat triggered, " + (coolMs/1000) + "s cooldown for bot", botId);
         setTimeout(() => {
           log.info("[BotManager] Anti-cheat cooldown ended for bot", botId);
           instance._antiCheatCooldownUntil = 0;
-        }, 3000);
+        }, coolMs);
       }
     });
 
