@@ -210,7 +210,8 @@ class OllamaManager {
             if (data.total && data.total > 0) {
               lastTotal = data.total;
               const completed = data.completed || 0;
-              const percent = Math.round((completed / data.total) * 100);
+              const rawPercent = Math.round((completed / data.total) * 100);
+              const percent = Math.max(0, Math.min(100, isNaN(rawPercent) ? 0 : rawPercent));
               const downloadedGB = (completed / 1e9).toFixed(2);
               const totalGB = (data.total / 1e9).toFixed(2);
               if (onProgress) {
@@ -226,7 +227,9 @@ class OllamaManager {
               if (data.status === "success") {
                 if (onProgress) onProgress({ status: "Готово!", downloaded: lastTotal, total: lastTotal, percent: 100, done: true });
               } else {
-                if (onProgress) onProgress({ status: data.status, downloaded: 0, total: lastTotal, percent: 0, done: false });
+                // Предварительные статусы (pulling manifest, verifying digest и т.д.)
+                const statusText = String(data.status).slice(0, 80);
+                if (onProgress) onProgress({ status: statusText, downloaded: 0, total: lastTotal, percent: lastTotal > 0 ? 1 : 0, done: false });
               }
             }
           } catch {

@@ -694,6 +694,79 @@ class AIBrain {
     }
   }
 
+  // ── Ответ оператору из AI-панели: выполняет команды МОЛЧА (без записи в Minecraft-чат) ──
+  async respondPrivately(playerName, message) {
+    if (!this.bot?.entity) return null;
+
+    log.info(`[AIBrain] Private respond from operator: ${message}`);
+
+    const userMsg = this.isAndy4
+      ? `${playerName}: ${message}`
+      : `Оператор написал: "${message}"\n${buildReActContext(this.bot, this.memory)}`;
+
+    this.memory.addMessage('user', userMsg);
+
+    const response = await this._callOllama(null, true);
+    if (!response) return null;
+
+    // Выполняем команды молча — без вывода в Minecraft чат
+    const chatText = await this._processResponseSilent(response);
+    return chatText || response;
+  }
+
+  // ── Обработка ответа без вывода в Minecraft чат ─────────────────────────
+  async _processResponseSilent(text) {
+    const executor = new ToolExecutor(this.bot, this.taskManager);
+    const clean = stripThinkBlocks(text);
+
+    if (this.isAndy4) {
+      const { chatText, commands } = parseAndy4Response(clean);
+
+      // Выполняем команды молча — ТОЛЬКО команды, без bot.chat()
+      for (const cmd of commands) {
+        log.info('[AIBrain Andy4 Silent] Executing:', cmd.name, cmd.args);
+        this.memory.currentAction = cmd.name;
+        const success = await executeAndy4Command(cmd, { bot: this.bot }, this.taskManager);
+        this.memory.addEpisode(cmd.name, success ? 'ok' : 'failed', success);
+      }
+
+      if (commands.length > 0) {
+        log.info(`[AIBrain Andy4 Silent] Executed ${commands.length} command(s) silently`);
+      }
+
+      return chatText || null;
+    } else {
+      let parsed = null;
+      try {
+        const match = clean.match(/\{[\s\S]*\}/);
+        if (match) parsed = JSON.parse(match[0]);
+      } catch {
+        return clean.slice(0, 200);
+      }
+
+      if (!parsed) return clean.slice(0, 200);
+
+      const says = parsed['говорю'] || parsed['say'] || null;
+      const action = parsed['действие'] || parsed['action'] || null;
+      const thinks = parsed['думаю'] || parsed['think'] || '';
+
+      if (thinks) log.info('[AIBrain ReAct Silent] Thinks:', thinks.slice(0, 80));
+
+      // Выполняем действие молча (кроме chat — его только показываем в AI-панели)
+      if (action?.tool && action.tool !== 'chat') {
+        log.info('[AIBrain ReAct Silent] Executing tool:', action.tool, action.args);
+        this.memory.currentAction = action.tool;
+        const result = await executor.execute(action.tool, action.args || {});
+        const success = !result.startsWith('Error') && !result.startsWith('Unknown') && !result.includes('not found');
+        this.memory.addEpisode(action.tool, result, success);
+        this.memory.addMessage('user', `Результат действия ${action.tool}: ${result}`);
+        log.info('[AIBrain ReAct Silent] Result:', result);
+      }
+
+      return says ? String(says).slice(0, 200) : clean.slice(0, 200);
+    }
+  }
+
 }
 
 module.exports = { AIBrain };

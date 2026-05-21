@@ -164,9 +164,25 @@ function setupIpcHandlers() {
     if (!profile) throw new Error("Профиль не найден");
     return botManager.playAnkaProfile(botId, profile.steps);
   });
-  ipcMain.handle("anka:clickSlot", async (_e, botId, slot, button) =>
-    botManager.clickBotSlot(botId, slot, button)
-  );
+  ipcMain.handle("anka:clickSlot", async (_e, botId, slot, button) => {
+    const result = await botManager.clickBotSlot(botId, slot, button);
+    // Записываем шаг в бэкенде где у нас точно есть правильный номер слота
+    if (ankaRecorder.isRecording(botId)) {
+      const instance = botManager.getInstanceForAnka(botId);
+      let winTitle = "__inventory__";
+      if (instance?.bot?.currentWindow) {
+        const raw = instance.bot.currentWindow.title || "";
+        try {
+          const p = JSON.parse(raw);
+          winTitle = p.text || p.translate || raw;
+        } catch {
+          winTitle = String(raw);
+        }
+      }
+      ankaRecorder.addStep(botId, { windowTitle: winTitle, slot, button: button || 0 });
+    }
+    return result;
+  });
   ipcMain.handle("shell:openExternal", (_e, url) => shell.openExternal(url));
 }
 

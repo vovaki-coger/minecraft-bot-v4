@@ -947,17 +947,21 @@ class BotManager {
     }
 
     try {
-      const sysPrompt = RUSSIAN_OVERRIDE + (instance.config.systemPrompt ||
-        "Ты умный помощник по Minecraft. Отвечай по-русски. Ты общаешься с оператором, не пишешь в игровой чат.");
-
-      // Используем AIBrain если доступен
+      // Используем AIBrain если доступен — respondPrivately выполняет команды молча
       if (instance.aiBrain && instance.status === "online") {
-        const response = await instance.aiBrain.askPrivate(message);
+        const response = await instance.aiBrain.respondPrivately(
+          instance.config.nick || "Оператор",
+          message
+        );
         if (response) {
           this._addAIChat(instance, "ai", response);
         }
         return;
       }
+
+      // Офлайн / нет AIBrain — просто отвечаем текстом без команд
+      const sysPrompt = RUSSIAN_OVERRIDE + (instance.config.systemPrompt ||
+        "Ты умный помощник по Minecraft. Отвечай по-русски. Ты общаешься с оператором, не пишешь в игровой чат.");
 
       const response = await this.ollamaManager.chat({
         model: instance.config.aiModel || "llama3",
@@ -974,6 +978,11 @@ class BotManager {
     } catch (err) {
       this._addAIChat(instance, "system", "Ошибка ИИ: " + err.message);
     }
+  }
+
+  // ── Получение инстанса для внешнего использования (AnkaRecorder) ─────────
+  getInstanceForAnka(botId) {
+    return this.bots.get(botId) || null;
   }
 
   async _offlineAIChat(instance, message) {

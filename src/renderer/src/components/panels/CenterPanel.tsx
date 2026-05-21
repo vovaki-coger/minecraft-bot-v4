@@ -189,11 +189,11 @@ export default function CenterPanel({ bot }: { bot: BotState | null }) {
     }
   }, []);
 
-  const handleClick = useCallback(async (slot: WindowSlot, button: number, windowTitle: string) => {
+  const handleClick = useCallback(async (slot: WindowSlot, button: number, _windowTitle: string) => {
     if (!bot || bot.status !== "online") return;
     flash(slot.slot, button);
+    // Запись шага anka теперь производится в бэкенде внутри clickSlot (надёжнее)
     try { await window.electronAPI.anka.clickSlot(bot.id, slot.slot, button); } catch {}
-    try { await window.electronAPI.anka.addStep(bot.id, { windowTitle, slot: slot.slot, button }); } catch {}
   }, [bot?.id, bot?.status, flash]);
 
   async function handleConnect() {
