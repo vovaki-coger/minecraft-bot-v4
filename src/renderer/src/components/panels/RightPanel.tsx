@@ -13,17 +13,15 @@ export default function RightPanel({ bot }: Props) {
   const [activeTab, setActiveTab] = useState<ChatTab>("minecraft");
   const [autoResponse, setAutoResponse] = useState(false);
   const [lobbyLoading, setLobbyLoading] = useState(false);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const aiContainerRef   = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const aiChatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const el = chatContainerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [bot?.chatHistory]);
 
   useEffect(() => {
-    const el = aiContainerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    aiChatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [bot?.aiChatHistory]);
 
   useEffect(() => {
@@ -162,9 +160,8 @@ export default function RightPanel({ bot }: Props) {
           </div>
 
           <div
-            ref={chatContainerRef}
             className="flex-1 overflow-y-auto p-2"
-            style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5 }}
+            style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
           >
             {mcMessages.length === 0 ? (
               <div className="text-center mt-8" style={{ color: "#555" }}>
@@ -178,6 +175,7 @@ export default function RightPanel({ bot }: Props) {
                 </div>
               ))
             )}
+            <div ref={chatEndRef} />
           </div>
 
           <div className="p-2 border-t" style={{ borderColor: "#3a3a3a" }}>
@@ -212,9 +210,8 @@ export default function RightPanel({ bot }: Props) {
           </div>
 
           <div
-            ref={aiContainerRef}
             className="flex-1 overflow-y-auto p-2"
-            style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5 }}
+            style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
           >
             {aiMessages.length === 0 ? (
               <div className="text-center mt-8" style={{ color: "#555" }}>
@@ -236,6 +233,7 @@ export default function RightPanel({ bot }: Props) {
                 </div>
               ))
             )}
+            <div ref={aiChatEndRef} />
           </div>
 
           <div className="p-2 border-t" style={{ borderColor: "#3a3a3a" }}>

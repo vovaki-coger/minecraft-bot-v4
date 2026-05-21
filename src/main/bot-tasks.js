@@ -4,13 +4,7 @@
  */
 const { goals } = require("mineflayer-pathfinder");
 const log = require("electron-log");
-
-// vec3 — прямая зависимость mineflayer; грузим с фоллбэком через позицию бота
-let _Vec3Module;
-try { _Vec3Module = require("vec3"); } catch {
-  try { _Vec3Module = require("mineflayer/node_modules/vec3"); } catch {}
-  // Если совсем нет — возьмём класс из bot.entity.position при первом вызове _v3()
-}
+const Vec3 = require("vec3");
 
 class TaskManager {
   constructor(botInstance, emit) {
@@ -22,14 +16,6 @@ class TaskManager {
   }
 
   get bot() { return this.instance.bot; }
-
-  // Создаёт Vec3 из x,y,z — берёт класс из require или из bot.entity.position
-  _v3(x, y, z) {
-    const V = _Vec3Module || (this.bot?.entity?.position?.constructor);
-    if (V) return new V(x, y, z);
-    // крайний фоллбэк: plain object (может не работать с blockAt, но не крашит)
-    return { x, y, z };
-  }
 
   _log(msg) {
     this.instance.chatHistory.push({ type: "survivor", text: `[ЗАДАЧА] ${msg}`, timestamp: Date.now() });
@@ -310,7 +296,6 @@ class TaskManager {
     if (craftingTableId) {
       table = this.bot.findBlock({ matching: craftingTableId, maxDistance: 16 });
       if (table) {
-        // Подходим к верстаку
         await this.bot.pathfinder.goto(
           new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2)
         ).catch(() => {});
@@ -318,19 +303,26 @@ class TaskManager {
     }
 
     try {
-      // Пробуем с верстаком, затем без (2x2 рецепты)
-      let recipes = this.bot.recipesFor(item.id, null, 1, table);
-      if (!recipes.length && table) {
-        recipes = this.bot.recipesFor(item.id, null, 1, null);
-      }
-      if (!recipes.length) {
+      // recipesAll — все рецепты независимо от наличия материалов в инвентаре
+      // (recipesFor возвращает пустой список если материалов нет)
+      const allWithTable  = this.bot.recipesAll ? this.bot.recipesAll(item.id, null, table) : [];
+      const allNoTable    = this.bot.recipesAll ? this.bot.recipesAll(item.id, null, null)  : [];
+      // Выбираем: сначала рецепты с верстаком, потом 2x2
+      const recipe = (table ? allWithTable[0] : null) || allNoTable[0];
+
+      if (!recipe) {
         this._chat("Нет рецепта для " + (item.displayName || item.name));
         return;
       }
-      await this.bot.craft(recipes[0], count, table);
+      await this.bot.craft(recipe, count, recipe.requiresTable ? table : null);
       this._chat("✅ Скрафтил " + count + "x " + (item.displayName || item.name));
     } catch (err) {
-      this._chat("Ошибка крафта: " + err.message.slice(0, 60));
+      const msg = (err.message || "").toLowerCase();
+      if (msg.includes("not enough") || msg.includes("missing") || msg.includes("cannot")) {
+        this._chat("Нет материалов для крафта: " + (item.displayName || item.name));
+      } else {
+        this._chat("Ошибка крафта: " + (err.message || "").slice(0, 60));
+      }
     }
   }
 
@@ -432,14 +424,14 @@ class TaskManager {
         let by = Math.floor(logBlock.position.y);
         // Идём к основанию ствола
         for (let dy = 0; dy < 20; dy++) {
-          const below = this.bot.blockAt(this._v3(bx, by - 1, bz));
+          const below = this.bot.blockAt(new Vec3(bx, by - 1, bz));
           if (!below || below.name !== tree.log) break;
           by--;
         }
         // Собираем ствол
         const stem = [];
         for (let dy = 0; dy <= 20; dy++) {
-          const lb = this.bot.blockAt(this._v3(bx, by + dy, bz));
+          const lb = this.bot.blockAt(new Vec3(bx, by + dy, bz));
           if (!lb || lb.name !== tree.log) break;
           stem.push(lb);
         }
@@ -457,7 +449,7 @@ class TaskManager {
 
         // Подбираем выпавшие предметы
         await this._sleep(600);
-        const treePos = this._v3(bx, by, bz);
+        const treePos = new Vec3(bx, by, bz);
         const dropped = Object.values(this.bot.entities)
           .filter(e => e.name === "item" && e.isValid && e.position?.distanceTo(treePos) < 14)
           .slice(0, 20);
@@ -485,7 +477,7 @@ class TaskManager {
       for (let dx = -r; dx <= r; dx += 2) {
         for (let dz = -r; dz <= r; dz += 2) {
           for (let dy = -4; dy <= 4; dy++) {
-            const gPos = this._v3(Math.floor(base.x) + dx, Math.floor(base.y) + dy, Math.floor(base.z) + dz);
+            const gPos = new Vec3(Math.floor(base.x) + dx, Math.floor(base.y) + dy, Math.floor(base.z) + dz);
             const ground = this.bot.blockAt(gPos);
             if (!ground || !SOIL.has(ground.name)) continue;
             const above = this.bot.blockAt(gPos.offset(0, 1, 0));
@@ -932,16 +924,80 @@ function parseCommand(message, botName) {
 
   // --- КРАФТ ---
   const craftMap = {
-    "верстак": "crafting_table", "стол": "crafting_table",
-    "деревянный меч": "wooden_sword", "меч": "wooden_sword",
-    "деревянная кирка": "wooden_pickaxe", "кирку": "wooden_pickaxe", "кирка": "wooden_pickaxe",
-    "топор": "wooden_axe", "лопата": "wooden_shovel",
-    "доски": "oak_planks", "факел": "torch", "лестница": "ladder",
+    // Верстак
+    "верстак": "crafting_table", "крафтинг стол": "crafting_table", "стол крафта": "crafting_table",
+    // Доски
+    "доски": "oak_planks", "дубовые доски": "oak_planks", "берёзовые доски": "birch_planks",
+    "еловые доски": "spruce_planks", "акациевые доски": "acacia_planks",
+    // Палки
+    "палки": "stick", "палку": "stick", "палка": "stick",
+    // Инструменты деревянные
+    "деревянная кирка": "wooden_pickaxe", "деревянный кирка": "wooden_pickaxe",
+    "кирку": "wooden_pickaxe", "кирка": "wooden_pickaxe",
+    "деревянный меч": "wooden_sword",
+    "деревянный топор": "wooden_axe", "деревянный лопата": "wooden_shovel",
+    "деревянная мотыга": "wooden_hoe",
+    // Каменные инструменты
+    "каменная кирка": "stone_pickaxe", "каменный меч": "stone_sword",
+    "каменный топор": "stone_axe", "каменная лопата": "stone_shovel",
+    "каменная мотыга": "stone_hoe",
+    // Железные инструменты
+    "железная кирка": "iron_pickaxe", "железный меч": "iron_sword",
+    "железный топор": "iron_axe", "железная лопата": "iron_shovel",
+    "железная мотыга": "iron_hoe",
+    // Золотые инструменты
+    "золотая кирка": "golden_pickaxe", "золотой меч": "golden_sword",
+    // Алмазные инструменты
+    "алмазная кирка": "diamond_pickaxe", "алмазный меч": "diamond_sword",
+    "алмазный топор": "diamond_axe", "алмазная лопата": "diamond_shovel",
+    // Броня железная
+    "железный шлем": "iron_helmet", "железная кираса": "iron_chestplate",
+    "железные поножи": "iron_leggings", "железные сапоги": "iron_boots",
+    // Броня золотая
+    "золотой шлем": "golden_helmet", "золотая кираса": "golden_chestplate",
+    // Броня кожаная
+    "кожаный шлем": "leather_helmet", "кожаная кираса": "leather_chestplate",
+    "кожаные поножи": "leather_leggings", "кожаные сапоги": "leather_boots",
+    // Броня алмазная
+    "алмазный шлем": "diamond_helmet", "алмазная кираса": "diamond_chestplate",
+    // Строительство / утварь
+    "сундук": "chest", "печь": "furnace", "плавильня": "blast_furnace",
+    "стол зачарований": "enchanting_table", "анвил": "anvil", "наковальня": "anvil",
+    "котёл": "cauldron", "бочка": "barrel", "стул": "crafting_table",
+    "лестница": "ladder", "дверь": "oak_door", "ворота": "oak_fence_gate",
+    "забор": "oak_fence", "плита": "oak_slab", "ступени": "oak_stairs",
+    "стекло бутылка": "glass_bottle", "бутылку": "glass_bottle",
+    // Освещение
+    "факел": "torch", "фонарь": "lantern", "светильник": "sea_lantern",
+    "светящийся камень": "glowstone", "лава ведро": "lava_bucket",
+    // Разное
+    "верёвка": "lead", "седло": "saddle",
+    "книга": "book", "книжная полка": "bookshelf",
+    "стрелы": "arrow", "лук": "bow",
+    "рыболовная удочка": "fishing_rod", "удочка": "fishing_rod",
+    "ведро": "bucket", "компас": "compass", "часы": "clock",
+    "карту": "map", "карта": "map",
+    "кровать": "white_bed", "белую кровать": "white_bed", "красную кровать": "red_bed",
+    "табличка": "oak_sign", "знак": "oak_sign",
+    "поршень": "piston", "слипкий поршень": "sticky_piston",
+    "диспенсер": "dispenser", "дропер": "dropper",
+    "наблюдатель": "observer", "воронка": "hopper",
+    "камень": "stone", "брусчатка": "cobblestone",
+    "булыжник": "cobblestone_slab",
+    // Еда
+    "золотое яблоко": "golden_apple", "хлеб": "bread",
+    "пирог": "pumpkin_pie", "торт": "cake",
+    // Простые: если только "меч" / "топор" / "лопата" — деревянные по умолчанию
+    "меч": "wooden_sword", "топор": "wooden_axe", "лопата": "wooden_shovel",
+    "мотыга": "wooden_hoe",
   };
   if (/скрафти|сделай|изготов|craft/.test(clean)) {
     for (const [ru, en] of Object.entries(craftMap)) {
       if (clean.includes(ru)) return { task: "craft", item: en };
     }
+    // Попытка напрямую использовать английское имя если написали по-английски
+    const enMatch = clean.match(/craft\s+(\w+)/);
+    if (enMatch) return { task: "craft", item: enMatch[1] };
     return { task: "craft", item: "crafting_table" };
   }
 

@@ -32,8 +32,16 @@ const RUSSIAN_OVERRIDE = `ВАЖНО: Ты общаешься НА РУССКО�
 function nbtToStr(v) {
   if (v == null) return "";
   if (typeof v === "string") return v;
-  if (typeof v === "object" && "value" in v) return nbtToStr(v.value);
-  return String(v);
+  if (typeof v !== "object") return String(v);
+  // NBT tag: {type:"string", value:"..."} or {value: ...}
+  if ("value" in v) return nbtToStr(v.value);
+  // JSON text component: {text:"..."} or {translate:"..."}
+  if ("text" in v) return String(v.text || "");
+  if ("translate" in v) return String(v.translate || "");
+  // extra/with arrays (chat components)
+  if (Array.isArray(v.extra)) return v.extra.map(nbtToStr).join("");
+  // Fallback — never return an object
+  return "";
 }
 function nbtToNum(v) {
   if (v == null) return 0;
@@ -241,12 +249,28 @@ class BotManager {
       }
 
       const movements = new Movements(bot);
-      // Отключаем спринт — основная причина "Invalid move player packet"
-      // на серверах с анти-читом (бот двигается быстрее допустимого)
       movements.allowSprinting = false;
       movements.canDig = true;
-      movements.allow1by1towers = false; // Убираем прыжки-башни (тоже детектируются)
+      movements.allow1by1towers = false;
+      // Не ходить по воде — делаем жидкость очень дорогой для паттфайндера
+      try { movements.liquidCost = 100; } catch {}
+      try { movements.waterCost = 100; } catch {}
       bot.pathfinder.setMovements(movements);
+
+      // Физический тик — топим бота если он на поверхности воды
+      bot.on("physicsTick", () => {
+        try {
+          if (!bot.entity || !bot.entity.position) return;
+          // Если бот НЕ в воде, но блок под ним — вода → принудительно тонем
+          if (!bot.entity.isInWater) {
+            const below = bot.blockAt(bot.entity.position.offset(0, -0.1, 0));
+            if (below && (below.name === "water" || below.name === "flowing_water")) {
+              bot.entity.velocity.y = -0.3;
+              bot.setControlState("sprint", false);
+            }
+          }
+        } catch {}
+      });
 
       
       // ── Самооборона ──────────────────────────────────────────────────
@@ -308,28 +332,6 @@ class BotManager {
       bot.on("heldItemChanged", emitInv);
       instance._inventoryInterval = setInterval(emitInv, 5000);
       setTimeout(emitInv, 2000);
-
-      // ── Авто-еда: регистрируем ВНУТРИ spawn — инвентарь гарантированно готов ──
-      let _eatCooldown = 0;
-      let _isEating = false;
-      bot.on("physicsTick", () => {
-        _eatCooldown++;
-        if (_eatCooldown >= 100 && !_isEating && bot.entity && bot.food < 16) {
-          _eatCooldown = 0;
-          try {
-            const foodItem = bot.inventory.items()
-              .filter(i => i.foodPoints && i.foodPoints > 0)
-              .sort((a, b) => (b.foodPoints || 0) - (a.foodPoints || 0))[0];
-            if (foodItem) {
-              _isEating = true;
-              bot.equip(foodItem, "hand")
-                .then(() => bot.consume())
-                .catch(() => {})
-                .finally(() => { _isEating = false; });
-            }
-          } catch { _isEating = false; }
-        }
-      });
     });
 
     bot.on("health", () => {
@@ -341,12 +343,29 @@ class BotManager {
     // Throttle: обновляем координаты не чаще 1 раза в 2 секунды
     // (physicsTick = 20 раз/сек, прямая отправка IPC перегружает канал)
     let _tickCounter = 0;
+    let _eatCooldown = 0;
+    let _isEating = false;
     bot.on("physicsTick", () => {
       _tickCounter++;
       if (_tickCounter % 40 === 0 && bot.entity) {
         instance.stats.x = Math.round(bot.entity.position.x);
         instance.stats.y = Math.round(bot.entity.position.y);
         instance.stats.z = Math.round(bot.entity.position.z);
+      }
+      // ── Авто-еда: кушаем когда голод < 16/20 (раз в ~5 сек) ──────
+      _eatCooldown++;
+      if (_eatCooldown >= 100 && !_isEating && bot.entity && bot.food != null && bot.food < 16) {
+        _eatCooldown = 0;
+        const foodItem = bot.inventory.items()
+          .filter(i => i.foodPoints && i.foodPoints > 0)
+          .sort((a, b) => (b.foodPoints || 0) - (a.foodPoints || 0))[0];
+        if (foodItem) {
+          _isEating = true;
+          bot.equip(foodItem, "hand")
+            .then(() => bot.consume())
+            .catch(() => {})
+            .finally(() => { _isEating = false; });
+        }
       }
     });
 
@@ -433,20 +452,25 @@ class BotManager {
 
     // ── Окна инвентаря (для рекордера анки) ───────────────────────────────
     const parseWindowTitle = (raw) => {
+      const extractText = (node) => {
+        if (!node) return "";
+        if (typeof node === "string") return node;
+        let text = String(node.text || node.translate || "");
+        if (Array.isArray(node.extra)) text += node.extra.map(extractText).join("");
+        if (Array.isArray(node.with)) text += node.with.map(extractText).join(" ");
+        return text;
+      };
       try {
+        // win.title может уже быть объектом (mineflayer распарсил JSON сам)
+        if (raw != null && typeof raw === "object") {
+          return extractText(raw).trim() || "";
+        }
+        if (!raw) return "";
         const p = JSON.parse(raw);
-        // Собираем текст из extra-массива (стиль Minecraft JSON-компонента)
-        const extractText = (node) => {
-          if (!node) return "";
-          let text = node.text || node.translate || "";
-          if (Array.isArray(node.extra)) text += node.extra.map(extractText).join("");
-          if (Array.isArray(node.with)) text += node.with.map(extractText).join(" ");
-          return text;
-        };
-        const result = extractText(p);
-        return result.trim() || raw;
+        return extractText(p).trim() || String(raw);
       } catch {
-        return raw;
+        // Если не JSON — вернуть как строку (никогда объект)
+        return raw != null ? String(raw) : "";
       }
     };
 
@@ -456,15 +480,19 @@ class BotManager {
       const slots = [];
       const winSlots = win.slots || [];
       // inventoryStart = первый слот инвентаря игрока (только слоты самого окна)
-      const slotCount = win.inventoryStart > 0
+      // Используем inventoryStart если он > 0, иначе берём длину массива (до 54)
+      const slotCount = (win.inventoryStart != null && win.inventoryStart > 0)
         ? win.inventoryStart
         : Math.min(winSlots.length, 54);
+      // Если вообще нет слотов — не шлём пустое окно, ждём updateSlot
+      if (slotCount === 0) return;
       for (let i = 0; i < slotCount; i++) {
         const item = winSlots[i];
-        const name = item ? nbtToStr(item.name) : "";
-        const displayName = item
-          ? (nbtToStr(item.displayName) || name.replace(/_/g, " "))
-          : "";
+        // Убираем префикс "minecraft:" из имён предметов
+        const rawName = item ? nbtToStr(item.name) : "";
+        const name = rawName.replace(/^minecraft:/, "");
+        const rawDisplay = item ? nbtToStr(item.displayName) : "";
+        const displayName = rawDisplay.replace(/^minecraft:/, "") || name.replace(/_/g, " ");
         slots.push({
           slot: i,
           name,
@@ -480,25 +508,32 @@ class BotManager {
         log.info(`[BotManager] windowOpen: "${win?.title}" slots=${win?.slots?.length} invStart=${win?.inventoryStart}`);
         emitWindowSlots(win);
 
-        // Серверы присылают предметы чуть позже — переотправляем через 500 мс
+        // Дебаунс: собираем все updateSlot за 80ms и шлём один раз
+        let slotDebounceTimer = null;
+        const debouncedEmit = () => {
+          if (slotDebounceTimer) clearTimeout(slotDebounceTimer);
+          slotDebounceTimer = setTimeout(() => {
+            slotDebounceTimer = null;
+            try {
+              if (bot.currentWindow === win) emitWindowSlots(win);
+            } catch (e) {
+              log.warn(`[BotManager] debounced emit error: ${e.message}`);
+            }
+          }, 80);
+        };
+
+        // Первая отправка через 150ms — к этому моменту сервер уже прислал предметы
         setTimeout(() => {
           try {
             if (bot.currentWindow === win) emitWindowSlots(win);
           } catch (e) {
-            log.warn(`[BotManager] windowOpen retry error: ${e.message}`);
+            log.warn(`[BotManager] windowOpen initial emit error: ${e.message}`);
           }
-        }, 500);
+        }, 150);
 
-        // Подписываемся на обновление отдельных слотов
+        // Подписываемся на обновление отдельных слотов (с дебаунсом)
         if (win && typeof win.on === "function") {
-          const slotHandler = () => {
-            try {
-              if (bot.currentWindow === win) emitWindowSlots(win);
-            } catch (e) {
-              log.warn(`[BotManager] updateSlot handler error: ${e.message}`);
-            }
-          };
-          win.on("updateSlot", slotHandler);
+          win.on("updateSlot", debouncedEmit);
         }
       } catch (err) {
         log.error(`[BotManager] windowOpen handler crashed: ${err.message}`);
