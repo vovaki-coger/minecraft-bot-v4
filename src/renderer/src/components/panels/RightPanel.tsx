@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { BotState, ChatMessage } from "../../store/appStore";
 
 interface Props {
@@ -13,16 +13,25 @@ export default function RightPanel({ bot }: Props) {
   const [activeTab, setActiveTab] = useState<ChatTab>("minecraft");
   const [autoResponse, setAutoResponse] = useState(false);
   const [lobbyLoading, setLobbyLoading] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const aiChatEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const aiChatContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = useCallback((ref: React.RefObject<HTMLDivElement>) => {
+    const el = ref.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distFromBottom < 120) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [bot?.chatHistory]);
+    scrollToBottom(chatContainerRef);
+  }, [bot?.chatHistory, scrollToBottom]);
 
   useEffect(() => {
-    aiChatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [bot?.aiChatHistory]);
+    scrollToBottom(aiChatContainerRef);
+  }, [bot?.aiChatHistory, scrollToBottom]);
 
   useEffect(() => {
     if (bot) {
@@ -97,9 +106,9 @@ export default function RightPanel({ bot }: Props) {
   const aiMessages = bot?.aiChatHistory || [];
 
   return (
-    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320 }}>
+    <div className="panel flex-shrink-0 flex flex-col" style={{ width: 320, overflow: "hidden" }}>
       {/* Tabs */}
-      <div className="flex border-b" style={{ borderColor: "#3a3a3a" }}>
+      <div className="flex border-b flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
         <button
           onClick={() => setActiveTab("minecraft")}
           className="flex-1 text-xs py-1.5 font-mono transition-colors"
@@ -128,7 +137,7 @@ export default function RightPanel({ bot }: Props) {
       {activeTab === "minecraft" && (
         <>
           <div
-            className="flex items-center justify-between px-3 py-1.5 border-b"
+            className="flex items-center justify-between px-3 py-1.5 border-b flex-shrink-0"
             style={{ borderColor: "#3a3a3a" }}
           >
             <span className="text-xs font-mono" style={{ color: "#888" }}>
@@ -160,6 +169,7 @@ export default function RightPanel({ bot }: Props) {
           </div>
 
           <div
+            ref={chatContainerRef}
             className="flex-1 overflow-y-auto p-2"
             style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
           >
@@ -175,10 +185,9 @@ export default function RightPanel({ bot }: Props) {
                 </div>
               ))
             )}
-            <div ref={chatEndRef} />
           </div>
 
-          <div className="p-2 border-t" style={{ borderColor: "#3a3a3a" }}>
+          <div className="p-2 border-t flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
             <div className="flex gap-1">
               <input
                 className="input flex-1 text-xs"
@@ -203,13 +212,14 @@ export default function RightPanel({ bot }: Props) {
       {/* AI-only Chat Tab */}
       {activeTab === "ai" && (
         <>
-          <div className="px-3 py-1.5 border-b" style={{ borderColor: "#3a3a3a" }}>
+          <div className="px-3 py-1.5 border-b flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
             <p className="text-xs" style={{ color: "#888" }}>
               Приватный разговор с ИИ — не пишет в Minecraft чат
             </p>
           </div>
 
           <div
+            ref={aiChatContainerRef}
             className="flex-1 overflow-y-auto p-2"
             style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
           >
@@ -233,10 +243,9 @@ export default function RightPanel({ bot }: Props) {
                 </div>
               ))
             )}
-            <div ref={aiChatEndRef} />
           </div>
 
-          <div className="p-2 border-t" style={{ borderColor: "#3a3a3a" }}>
+          <div className="p-2 border-t flex-shrink-0" style={{ borderColor: "#3a3a3a" }}>
             <div className="flex gap-1">
               <input
                 className="input flex-1 text-xs"

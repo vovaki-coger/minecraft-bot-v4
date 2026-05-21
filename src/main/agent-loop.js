@@ -1,11 +1,5 @@
 /**
- * AgentLoop v3.1 — авто-бой, самозащита, ответные удары по игрокам.
- *
- * Новое:
- *  - Отслеживает кто ударил бота (моб или игрок) → бьёт в ответ до смерти
- *  - Проактивная атака ближайших враждебных мобов в радиусе 8м
- *  - Преследует цель пока та не умрёт или не убежит за 20м
- *  - Игнорирует цель если бот в Survivor/Anarchy режиме (те управляют сами)
+ * AgentLoop v3.2 — фикс: нокбек, кулдаун атаки 1.9, движение к цели без отмены pathfinder.
  */
 const { goals } = require("mineflayer-pathfinder");
 const log = require("electron-log");
@@ -21,6 +15,9 @@ const HOSTILE_MOBS = new Set([
   "vex","evoker","shulker","chicken_jockey","spider_jockey",
 ]);
 
+// Кулдаун атаки 1.9 pvp (~650мс между полными ударами)
+const ATTACK_COOLDOWN_MS = 650;
+
 class AgentLoop {
   constructor(instance, emit) {
     this.instance = instance;
@@ -32,17 +29,25 @@ class AgentLoop {
     this._mainLoop = null;
     this._combatLoop = null;
 
-    // Цель для боя (моб или игрок)
     this._combatTarget = null;
     this._combatTargetName = null;
     this._combatStartedAt = 0;
 
-    // Кто бил бота: Map<entityId, {entity, lastHitTime, isPlayer, name}>
     this._attackers = new Map();
 
     this._posHistory = [];
     this._lastPosRecord = 0;
     this._stuckAttempts = 0;
+
+    // Кулдаун атаки — уважаем 1.9 pvp механику
+    this._lastAttackTime = 0;
+
+    // Нокбек: когда разрешено снова двигаться (временно останавливаем pathfinder)
+    this._knockbackPauseUntil = 0;
+
+    // Флаг "уже двигаемся к цели" — не отменяем pathfinder каждые 200мс
+    this._movingToTarget = false;
+    this._moveTargetPos = null;
 
     this._attachBotEvents();
     this._startLoop();
@@ -59,26 +64,21 @@ class AgentLoop {
     bot.on("death", () => this._onDeath());
     bot.on("health", () => this._onHealthTick());
 
-    // Кто ударил бота
     bot.on("entityHurt", (entity) => {
       if (entity === bot.entity) this._onBotHurt();
     });
 
-    // Кто ударил бота напрямую (attacker)
     bot.on("entityDamaged", (entity, attacker) => {
       if (entity !== bot.entity || !attacker) return;
       this._registerAttacker(attacker);
     });
 
-    // Обнаруживаем попадания через снижение HP
     bot._client?.on("entity_status", (data) => {
       if (data.entityId === bot.entity?.id && data.entityStatus === 2) {
-        // Status 2 = hurt animation
         this._onBotHurt();
       }
     });
 
-    // Смерть цели — сбрасываем цель
     bot.on("entityDead", (entity) => {
       if (this._combatTarget && entity === this._combatTarget) {
         log.info("[AgentLoop] Combat target died:", this._combatTargetName);
@@ -106,12 +106,15 @@ class AgentLoop {
       name,
     });
 
-    // Немедленно переключаемся на атакующего
     this._setCombatTarget(attacker, name);
   }
 
   _onBotHurt() {
-    // Fallback: если нет информации об атакующем — ищем ближайшего врага
+    // Остановить pathfinder на 500мс — сервер применяет нокбек
+    this._knockbackPauseUntil = Date.now() + 500;
+    this._movingToTarget = false;
+    try { this.bot.pathfinder.stop(); } catch {}
+
     if (!this._combatTarget) {
       const nearest = this._findNearestThreat(20);
       if (nearest) this._setCombatTarget(nearest.entity, nearest.name);
@@ -120,6 +123,11 @@ class AgentLoop {
 
   _setCombatTarget(entity, name) {
     if (!entity?.position) return;
+    // Если цель сменилась — сбрасываем флаг движения
+    if (this._combatTarget !== entity) {
+      this._movingToTarget = false;
+      this._moveTargetPos = null;
+    }
     this._combatTarget = entity;
     this._combatTargetName = name;
     this._combatStartedAt = Date.now();
@@ -130,21 +138,26 @@ class AgentLoop {
     this._combatTarget = null;
     this._combatTargetName = null;
     this._combatStartedAt = 0;
+    this._movingToTarget = false;
+    this._moveTargetPos = null;
   }
 
-  // ── Боевой цикл (200мс) ─────────────────────────────────────────────
+  // ── Боевой цикл (250мс) ─────────────────────────────────────────────
 
   _startCombatLoop() {
     this._combatLoop = setInterval(() => {
       this._combatTick().catch(() => {});
-    }, 200);
+    }, 250);
   }
 
   async _combatTick() {
     const bot = this.bot;
     if (!bot?.entity || !this._active) return;
 
-    // Проактивная атака: ищем врагов в радиусе 8м ВСЕГДА
+    // Нокбек-пауза — не двигаемся пока сервер обрабатывает откат
+    if (Date.now() < this._knockbackPauseUntil) return;
+
+    // Проактивная атака: ищем ближайшего врага в 8м
     const proactiveTarget = this._findNearestHostileMob(8);
     if (proactiveTarget && !this._combatTarget) {
       this._setCombatTarget(proactiveTarget, proactiveTarget.mobType || proactiveTarget.name || "mob");
@@ -152,7 +165,6 @@ class AgentLoop {
 
     if (!this._combatTarget) return;
 
-    // Проверяем что цель ещё жива и рядом
     const target = this._combatTarget;
     if (!target.isValid || !target.position) {
       this._clearCombatTarget();
@@ -161,7 +173,6 @@ class AgentLoop {
 
     const dist = bot.entity.position.distanceTo(target.position);
 
-    // Цель убежала далеко (>20м) — прекращаем преследование игроков через 15 сек
     if (dist > 24) {
       const elapsed = Date.now() - this._combatStartedAt;
       if (elapsed > 15000) {
@@ -171,16 +182,37 @@ class AgentLoop {
       }
     }
 
-    // Подходим и бьём
     try {
       if (dist > 3) {
-        bot.pathfinder.goto(new goals.GoalNear(
-          target.position.x, target.position.y, target.position.z, 1
-        )).catch(() => {});
+        // Проверяем — цель сильно сместилась? Перестраиваем маршрут
+        const targetPos = target.position;
+        const moved = !this._moveTargetPos ||
+          this._moveTargetPos.distanceTo(targetPos) > 3;
+
+        if (!this._movingToTarget || moved) {
+          this._movingToTarget = true;
+          this._moveTargetPos = targetPos.clone();
+          bot.pathfinder.goto(
+            new goals.GoalFollow(target, 2)
+          ).then(() => {
+            this._movingToTarget = false;
+          }).catch(() => {
+            this._movingToTarget = false;
+          });
+        }
       } else {
-        // В зоне удара — атакуем
-        await this._equipBestWeapon();
-        await bot.attack(target);
+        // В зоне удара — смотрим на цель и атакуем с кулдауном 1.9 pvp
+        this._movingToTarget = false;
+        try { bot.pathfinder.stop(); } catch {}
+
+        await bot.lookAt(target.position.offset(0, (target.height || 1.8) * 0.9, 0));
+
+        const now = Date.now();
+        if (now - this._lastAttackTime >= ATTACK_COOLDOWN_MS) {
+          this._lastAttackTime = now;
+          await this._equipBestWeapon();
+          await bot.attack(target);
+        }
       }
     } catch {}
   }
@@ -213,7 +245,6 @@ class AgentLoop {
       if (!entity.position || entity === bot.entity) continue;
       const name = (entity.mobType || entity.name || entity.type || "").toLowerCase();
       const isHostileMob = HOSTILE_MOBS.has(name);
-      // Игроки учитываются только если есть в _attackers
       const isKnownAttacker = this._attackers.has(entity.id);
       if (!isHostileMob && !isKnownAttacker) continue;
       const dist = pos.distanceTo(entity.position);
@@ -347,7 +378,14 @@ class AgentLoop {
       for (const tier of TIERS) {
         const item = bot.inventory.items().find((i) => i.name === `${tier}_${slot}`);
         if (item) {
-          try { await bot.equip(item, slot === "helmet" ? "head" : slot === "chestplate" ? "torso" : slot === "leggings" ? "legs" : "feet"); break; } catch {}
+          try {
+            await bot.equip(item,
+              slot === "helmet" ? "head" :
+              slot === "chestplate" ? "torso" :
+              slot === "leggings" ? "legs" : "feet"
+            );
+            break;
+          } catch {}
         }
       }
     }
@@ -363,7 +401,6 @@ class AgentLoop {
     const bot = this.bot;
     if (!bot?.entity || !this._active) return;
 
-    // Очищаем устаревших атакующих (>60 сек без удара)
     const now = Date.now();
     for (const [id, info] of this._attackers) {
       if (now - info.lastHitTime > 60000) this._attackers.delete(id);
@@ -374,7 +411,6 @@ class AgentLoop {
       return;
     }
 
-    // Запись позиции для детекции зависания
     if (now - this._lastPosRecord > 10000) {
       this._lastPosRecord = now;
       const pos = { x: Math.round(bot.entity.position.x), z: Math.round(bot.entity.position.z) };
@@ -396,7 +432,6 @@ class AgentLoop {
       }
     }
 
-    // Подбираем выпавшие предметы поблизости (только в свободном режиме)
     await this._pickupNearbyItems();
   }
 
@@ -420,6 +455,7 @@ class AgentLoop {
   async _unstuck(attempt) {
     const bot = this.bot;
     this._posHistory = [];
+    this._movingToTarget = false;
     try { bot.pathfinder.stop(); } catch {}
 
     const directions = [0, Math.PI / 2, Math.PI, -Math.PI / 2, Math.PI / 4, -Math.PI / 4];
