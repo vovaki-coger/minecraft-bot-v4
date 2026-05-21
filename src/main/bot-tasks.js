@@ -4,7 +4,13 @@
  */
 const { goals } = require("mineflayer-pathfinder");
 const log = require("electron-log");
-const Vec3 = require("vec3");
+
+// vec3 — прямая зависимость mineflayer; грузим с фоллбэком через позицию бота
+let _Vec3Module;
+try { _Vec3Module = require("vec3"); } catch {
+  try { _Vec3Module = require("mineflayer/node_modules/vec3"); } catch {}
+  // Если совсем нет — возьмём класс из bot.entity.position при первом вызове _v3()
+}
 
 class TaskManager {
   constructor(botInstance, emit) {
@@ -16,6 +22,14 @@ class TaskManager {
   }
 
   get bot() { return this.instance.bot; }
+
+  // Создаёт Vec3 из x,y,z — берёт класс из require или из bot.entity.position
+  _v3(x, y, z) {
+    const V = _Vec3Module || (this.bot?.entity?.position?.constructor);
+    if (V) return new V(x, y, z);
+    // крайний фоллбэк: plain object (может не работать с blockAt, но не крашит)
+    return { x, y, z };
+  }
 
   _log(msg) {
     this.instance.chatHistory.push({ type: "survivor", text: `[ЗАДАЧА] ${msg}`, timestamp: Date.now() });
@@ -418,14 +432,14 @@ class TaskManager {
         let by = Math.floor(logBlock.position.y);
         // Идём к основанию ствола
         for (let dy = 0; dy < 20; dy++) {
-          const below = this.bot.blockAt(new Vec3(bx, by - 1, bz));
+          const below = this.bot.blockAt(this._v3(bx, by - 1, bz));
           if (!below || below.name !== tree.log) break;
           by--;
         }
         // Собираем ствол
         const stem = [];
         for (let dy = 0; dy <= 20; dy++) {
-          const lb = this.bot.blockAt(new Vec3(bx, by + dy, bz));
+          const lb = this.bot.blockAt(this._v3(bx, by + dy, bz));
           if (!lb || lb.name !== tree.log) break;
           stem.push(lb);
         }
@@ -443,7 +457,7 @@ class TaskManager {
 
         // Подбираем выпавшие предметы
         await this._sleep(600);
-        const treePos = new Vec3(bx, by, bz);
+        const treePos = this._v3(bx, by, bz);
         const dropped = Object.values(this.bot.entities)
           .filter(e => e.name === "item" && e.isValid && e.position?.distanceTo(treePos) < 14)
           .slice(0, 20);
@@ -471,7 +485,7 @@ class TaskManager {
       for (let dx = -r; dx <= r; dx += 2) {
         for (let dz = -r; dz <= r; dz += 2) {
           for (let dy = -4; dy <= 4; dy++) {
-            const gPos = new Vec3(Math.floor(base.x) + dx, Math.floor(base.y) + dy, Math.floor(base.z) + dz);
+            const gPos = this._v3(Math.floor(base.x) + dx, Math.floor(base.y) + dy, Math.floor(base.z) + dz);
             const ground = this.bot.blockAt(gPos);
             if (!ground || !SOIL.has(ground.name)) continue;
             const above = this.bot.blockAt(gPos.offset(0, 1, 0));
