@@ -32,16 +32,8 @@ const RUSSIAN_OVERRIDE = `ВАЖНО: Ты общаешься НА РУССКО�
 function nbtToStr(v) {
   if (v == null) return "";
   if (typeof v === "string") return v;
-  if (typeof v !== "object") return String(v);
-  // NBT tag: {type:"string", value:"..."} or {value: ...}
-  if ("value" in v) return nbtToStr(v.value);
-  // JSON text component: {text:"..."} or {translate:"..."}
-  if ("text" in v) return String(v.text || "");
-  if ("translate" in v) return String(v.translate || "");
-  // extra/with arrays (chat components)
-  if (Array.isArray(v.extra)) return v.extra.map(nbtToStr).join("");
-  // Fallback — never return an object
-  return "";
+  if (typeof v === "object" && "value" in v) return nbtToStr(v.value);
+  return String(v);
 }
 function nbtToNum(v) {
   if (v == null) return 0;
@@ -248,145 +240,13 @@ class BotManager {
         log.info("[BotManager] AIBrain started for bot", botId);
       }
 
-      // ══════════════════════════════════════════════════════════════════
-      // АНТИ-ЧИТ: packet-level physics validation
-      //
-      // Архитектура mineflayer physics loop (каждые 50 ms):
-      //   1. control states → acceleration
-      //   2. gravity + drag → velocity update
-      //   3. collision resolution → position update
-      //   4. «physicsTick» event fires           ← МЫ ВМЕШИВАЕМСЯ ЗДЕСЬ
-      //   5. position/position_look packet sent   ← пакет уже корректный
-      //
-      // Правило: не дропаем и не задерживаем пакеты — мы клампим velocity
-      // ДО отправки, поэтому сервер получает физически возможную позицию.
-      //
-      // Vanilla constants (1.20.x):
-      //   walk  = 0.21585 bpt   sprint = 0.2806 bpt
-      //   jump  = 0.42 bpt      gravity = 0.08 bpt²
-      //   termV = 3.92 bpt (downward)
-      //   airDrag = 0.98        groundFriction = 0.546 (0.91 * 0.6)
-      // ══════════════════════════════════════════════════════════════════
-
-      // ── 1. Pathfinder: только physically-valid moves ─────────────────
       const movements = new Movements(bot);
-      movements.allowSprinting   = false;
-      movements.canDig           = true;
-      movements.allow1by1towers  = false;
-      movements.allowParkour     = false;
-      movements.allowFreeMotion  = false;
-      movements.maxDropDown      = 3;
-      movements.canOpenDoors     = true;
+      // Отключаем спринт — основная причина "Invalid move player packet"
+      // на серверах с анти-читом (бот двигается быстрее допустимого)
+      movements.allowSprinting = false;
+      movements.canDig = true;
+      movements.allow1by1towers = false; // Убираем прыжки-башни (тоже детектируются)
       bot.pathfinder.setMovements(movements);
-
-      // ── 2. physics settings — точно vanilla ─────────────────────────
-      try {
-        if (bot.physics) {
-          bot.physics.gravity        = 0.08;
-          bot.physics.airdrag        = 0.98;
-          bot.physics.groundFriction = 0.6;
-          bot.physics.stepHeight     = 0.6;
-          // НЕ меняем walkSpeed/sprintSpeed — это multiplier внутри движка,
-          // физически некорректно выставлять их ниже vanilla; вместо этого
-          // клампим итоговый velocity в physicsTick
-        }
-      } catch(e) { log.warn("[AC] physics settings:", e.message); }
-
-      // ── 3. physicsTick velocity clamp ───────────────────────────────
-      // Срабатывает ПОСЛЕ вычисления физики, ДО отправки пакета позиции.
-      // Клампим horizontal velocity до vanilla walk limit.
-      // Это гарантирует что position-пакет содержит физически возможное значение.
-      {
-        const WALK_MAX  = 0.215;  // чуть ниже vanilla 0.21585 — запас на float
-        const TERM_VEL  = 3.92;   // terminal velocity (вниз)
-
-        // Запоминаем последнюю подтверждённую сервером позицию
-        // (сервер шлёт position_and_look когда он корректирует нас)
-        let _serverPos = null;
-        bot.on('forcedMove', () => {
-          if (bot.entity) _serverPos = bot.entity.position.clone();
-        });
-
-        const _tickHandler = () => {
-          if (!bot.entity) return;
-          const vel = bot.entity.velocity;
-
-          // Горизонтальный кламп
-          const hSq = vel.x * vel.x + vel.z * vel.z;
-          if (hSq > WALK_MAX * WALK_MAX) {
-            const scale = WALK_MAX / Math.sqrt(hSq);
-            vel.x *= scale;
-            vel.z *= scale;
-          }
-
-          // Вертикальный кламп (terminal velocity)
-          if (vel.y < -TERM_VEL) vel.y = -TERM_VEL;
-        };
-
-        bot.on('physicsTick', _tickHandler);
-        bot.once('end', () => { try { bot.removeListener('physicsTick', _tickHandler); } catch {} });
-      }
-
-      // ── 4. Packet-level onGround correction ─────────────────────────
-      // Один из самых частых банов: onGround=true когда бот в воздухе.
-      // Перехватываем write, но НЕ дропаем — только исправляем флаг.
-      {
-        const _origWrite = bot._client.write.bind(bot._client);
-        bot._client.write = function(name, params) {
-          if ((name === 'position' || name === 'position_look') && params && bot.entity) {
-            // Проверяем есть ли твёрдый блок под ногами (в пределах 0.05 блока)
-            try {
-              const below = bot.blockAt(bot.entity.position.offset(0, -0.1, 0));
-              const actualOnGround = below && below.boundingBox === 'block'
-                ? bot.entity.position.y - Math.floor(bot.entity.position.y) < 0.05
-                : false;
-              // Если физика говорит onGround но блока нет — исправляем
-              if (params.onGround && !actualOnGround && bot.entity.velocity.y < -0.1) {
-                params = { ...params, onGround: false };
-              }
-            } catch {}
-          }
-          return _origWrite(name, params);
-        };
-        bot.once('end', () => { try { bot._client.write = _origWrite; } catch {} });
-      }
-
-      // ── 5. Плавные повороты головы ───────────────────────────────────
-      // Мгновенный поворот на 180° — детектируется любым анти-читом.
-      // Lerp по 25°/тик = максимум быстрого живого игрока.
-      {
-        const _origLookAt = bot.lookAt.bind(bot);
-        bot.lookAt = async function(point, force = false) {
-          if (!bot.entity || !point) return _origLookAt(point, force);
-          try {
-            const dx = point.x - bot.entity.position.x;
-            const dy = (point.y != null ? point.y : bot.entity.position.y + 1.62)
-                       - (bot.entity.position.y + 1.62);
-            const dz = point.z - bot.entity.position.z;
-            const tYaw   = Math.atan2(-dx, dz);
-            const tPitch = Math.atan2(-dy, Math.sqrt(dx*dx + dz*dz));
-
-            let dYaw = tYaw - bot.entity.yaw;
-            while (dYaw >  Math.PI) dYaw -= 2 * Math.PI;
-            while (dYaw < -Math.PI) dYaw += 2 * Math.PI;
-            const dPitch = tPitch - bot.entity.pitch;
-
-            const MAX_DEG = 0.44; // ~25° в радианах за тик
-            const steps = Math.ceil(Math.max(Math.abs(dYaw), Math.abs(dPitch)) / MAX_DEG);
-            if (steps <= 1 || force) return _origLookAt(point, force);
-
-            const startYaw = bot.entity.yaw, startPitch = bot.entity.pitch;
-            for (let i = 1; i <= steps; i++) {
-              if (!bot.entity) break;
-              const t = i / steps;
-              bot.entity.yaw   = startYaw   + dYaw   * t;
-              bot.entity.pitch = startPitch + dPitch * t;
-              await new Promise(r => setTimeout(r, 50));
-            }
-            return _origLookAt(point, true);
-          } catch { return _origLookAt(point, force); }
-        };
-      }
 
       
       // ── Самооборона ──────────────────────────────────────────────────
@@ -448,6 +308,28 @@ class BotManager {
       bot.on("heldItemChanged", emitInv);
       instance._inventoryInterval = setInterval(emitInv, 5000);
       setTimeout(emitInv, 2000);
+
+      // ── Авто-еда: регистрируем ВНУТРИ spawn — инвентарь гарантированно готов ──
+      let _eatCooldown = 0;
+      let _isEating = false;
+      bot.on("physicsTick", () => {
+        _eatCooldown++;
+        if (_eatCooldown >= 100 && !_isEating && bot.entity && bot.food < 16) {
+          _eatCooldown = 0;
+          try {
+            const foodItem = bot.inventory.items()
+              .filter(i => i.foodPoints && i.foodPoints > 0)
+              .sort((a, b) => (b.foodPoints || 0) - (a.foodPoints || 0))[0];
+            if (foodItem) {
+              _isEating = true;
+              bot.equip(foodItem, "hand")
+                .then(() => bot.consume())
+                .catch(() => {})
+                .finally(() => { _isEating = false; });
+            }
+          } catch { _isEating = false; }
+        }
+      });
     });
 
     bot.on("health", () => {
@@ -459,29 +341,12 @@ class BotManager {
     // Throttle: обновляем координаты не чаще 1 раза в 2 секунды
     // (physicsTick = 20 раз/сек, прямая отправка IPC перегружает канал)
     let _tickCounter = 0;
-    let _eatCooldown = 0;
-    let _isEating = false;
     bot.on("physicsTick", () => {
       _tickCounter++;
       if (_tickCounter % 40 === 0 && bot.entity) {
         instance.stats.x = Math.round(bot.entity.position.x);
         instance.stats.y = Math.round(bot.entity.position.y);
         instance.stats.z = Math.round(bot.entity.position.z);
-      }
-      // ── Авто-еда: кушаем когда голод < 16/20 (раз в ~5 сек) ──────
-      _eatCooldown++;
-      if (_eatCooldown >= 100 && !_isEating && bot.entity && bot.food != null && bot.food < 16) {
-        _eatCooldown = 0;
-        const foodItem = bot.inventory.items()
-          .filter(i => i.foodPoints && i.foodPoints > 0)
-          .sort((a, b) => (b.foodPoints || 0) - (a.foodPoints || 0))[0];
-        if (foodItem) {
-          _isEating = true;
-          bot.equip(foodItem, "hand")
-            .then(() => bot.consume())
-            .catch(() => {})
-            .finally(() => { _isEating = false; });
-        }
       }
     });
 
@@ -568,25 +433,20 @@ class BotManager {
 
     // ── Окна инвентаря (для рекордера анки) ───────────────────────────────
     const parseWindowTitle = (raw) => {
-      const extractText = (node) => {
-        if (!node) return "";
-        if (typeof node === "string") return node;
-        let text = String(node.text || node.translate || "");
-        if (Array.isArray(node.extra)) text += node.extra.map(extractText).join("");
-        if (Array.isArray(node.with)) text += node.with.map(extractText).join(" ");
-        return text;
-      };
       try {
-        // win.title может уже быть объектом (mineflayer распарсил JSON сам)
-        if (raw != null && typeof raw === "object") {
-          return extractText(raw).trim() || "";
-        }
-        if (!raw) return "";
         const p = JSON.parse(raw);
-        return extractText(p).trim() || String(raw);
+        // Собираем текст из extra-массива (стиль Minecraft JSON-компонента)
+        const extractText = (node) => {
+          if (!node) return "";
+          let text = node.text || node.translate || "";
+          if (Array.isArray(node.extra)) text += node.extra.map(extractText).join("");
+          if (Array.isArray(node.with)) text += node.with.map(extractText).join(" ");
+          return text;
+        };
+        const result = extractText(p);
+        return result.trim() || raw;
       } catch {
-        // Если не JSON — вернуть как строку (никогда объект)
-        return raw != null ? String(raw) : "";
+        return raw;
       }
     };
 
@@ -596,19 +456,15 @@ class BotManager {
       const slots = [];
       const winSlots = win.slots || [];
       // inventoryStart = первый слот инвентаря игрока (только слоты самого окна)
-      // Используем inventoryStart если он > 0, иначе берём длину массива (до 54)
-      const slotCount = (win.inventoryStart != null && win.inventoryStart > 0)
+      const slotCount = win.inventoryStart > 0
         ? win.inventoryStart
         : Math.min(winSlots.length, 54);
-      // Если вообще нет слотов — не шлём пустое окно, ждём updateSlot
-      if (slotCount === 0) return;
       for (let i = 0; i < slotCount; i++) {
         const item = winSlots[i];
-        // Убираем префикс "minecraft:" из имён предметов
-        const rawName = item ? nbtToStr(item.name) : "";
-        const name = rawName.replace(/^minecraft:/, "");
-        const rawDisplay = item ? nbtToStr(item.displayName) : "";
-        const displayName = rawDisplay.replace(/^minecraft:/, "") || name.replace(/_/g, " ");
+        const name = item ? nbtToStr(item.name) : "";
+        const displayName = item
+          ? (nbtToStr(item.displayName) || name.replace(/_/g, " "))
+          : "";
         slots.push({
           slot: i,
           name,
@@ -624,32 +480,25 @@ class BotManager {
         log.info(`[BotManager] windowOpen: "${win?.title}" slots=${win?.slots?.length} invStart=${win?.inventoryStart}`);
         emitWindowSlots(win);
 
-        // Дебаунс: собираем все updateSlot за 80ms и шлём один раз
-        let slotDebounceTimer = null;
-        const debouncedEmit = () => {
-          if (slotDebounceTimer) clearTimeout(slotDebounceTimer);
-          slotDebounceTimer = setTimeout(() => {
-            slotDebounceTimer = null;
-            try {
-              if (bot.currentWindow === win) emitWindowSlots(win);
-            } catch (e) {
-              log.warn(`[BotManager] debounced emit error: ${e.message}`);
-            }
-          }, 80);
-        };
-
-        // Первая отправка через 150ms — к этому моменту сервер уже прислал предметы
+        // Серверы присылают предметы чуть позже — переотправляем через 500 мс
         setTimeout(() => {
           try {
             if (bot.currentWindow === win) emitWindowSlots(win);
           } catch (e) {
-            log.warn(`[BotManager] windowOpen initial emit error: ${e.message}`);
+            log.warn(`[BotManager] windowOpen retry error: ${e.message}`);
           }
-        }, 150);
+        }, 500);
 
-        // Подписываемся на обновление отдельных слотов (с дебаунсом)
+        // Подписываемся на обновление отдельных слотов
         if (win && typeof win.on === "function") {
-          win.on("updateSlot", debouncedEmit);
+          const slotHandler = () => {
+            try {
+              if (bot.currentWindow === win) emitWindowSlots(win);
+            } catch (e) {
+              log.warn(`[BotManager] updateSlot handler error: ${e.message}`);
+            }
+          };
+          win.on("updateSlot", slotHandler);
         }
       } catch (err) {
         log.error(`[BotManager] windowOpen handler crashed: ${err.message}`);
