@@ -257,21 +257,6 @@ class BotManager {
       try { movements.waterCost = 100; } catch {}
       bot.pathfinder.setMovements(movements);
 
-      // Физический тик — топим бота если он на поверхности воды
-      bot.on("physicsTick", () => {
-        try {
-          if (!bot.entity || !bot.entity.position) return;
-          // Если бот НЕ в воде, но блок под ним — вода → принудительно тонем
-          if (!bot.entity.isInWater) {
-            const below = bot.blockAt(bot.entity.position.offset(0, -0.1, 0));
-            if (below && (below.name === "water" || below.name === "flowing_water")) {
-              bot.entity.velocity.y = -0.3;
-              bot.setControlState("sprint", false);
-            }
-          }
-        } catch {}
-      });
-
       
       // ── Самооборона ──────────────────────────────────────────────────
       let prevHealth = bot.health || 20;
