@@ -1,6 +1,6 @@
 {
   "name": "@workspace/minecraft-bot-4",
-  "version": "4.0.4",
+  "version": "4.2.7",
   "description": "Призмарин бот v4 - LobbyHandler, двойной чат, исправленный авто-логин",
   "main": "src/main/index.js",
   "private": true,
