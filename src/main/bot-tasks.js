@@ -829,8 +829,10 @@ class TaskManager {
     // Лёгкий случайный джиттер (0–jitterMs мс) для большей естественности
     if (jitterMs > 0) await this._sleep(Math.floor(Math.random() * jitterMs));
     await this.bot.pathfinder.goto(goal).catch(() => {});
-    // Пауза после прибытия — даём серверу обработать позицию (предотвращает rubber-band)
-    await this._sleep(200 + Math.floor(Math.random() * 150));
+    // Ждём 3 игровых тика после прибытия — сервер должен принять позицию.
+    // Это предотвращает rubber-band и срабатывание "moved too quickly".
+    try { await this.bot.waitForTicks(3); } catch {}
+    await this._sleep(50 + Math.floor(Math.random() * 100));
   }
 }
 

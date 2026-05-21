@@ -177,8 +177,87 @@ class BotManager {
       checkTimeoutInterval: 60000,
     };
     const proxy = config.proxy || this.configManager.get("globalProxy", "");
-    if (proxy) opts.agent = this._proxyAgent(proxy);
+    if (proxy) {
+      const connectFn = this._buildProxyConnect(proxy, opts.host, opts.port);
+      if (connectFn) opts.connect = connectFn;
+    }
     return opts;
+  }
+
+  // Строит TCP-туннель через прокси для mineflayer (Minecraft — raw TCP, не HTTP)
+  _buildProxyConnect(proxyStr, targetHost, targetPort) {
+    try {
+      let url = proxyStr.trim();
+      if (!url.includes("://")) url = "socks5://" + url;
+      const parsed = new URL(url);
+      const proxyHost = parsed.hostname;
+      const proxyPort = parseInt(parsed.port) || 1080;
+      const proxyUser = decodeURIComponent(parsed.username || "");
+      const proxyPass = decodeURIComponent(parsed.password || "");
+
+      // SOCKS4 / SOCKS5 — используем пакет socks напрямую для raw TCP
+      if (parsed.protocol === "socks4:" || parsed.protocol === "socks5:") {
+        const socksType = parsed.protocol === "socks4:" ? 4 : 5;
+        return (client) => {
+          let SocksClient;
+          try { SocksClient = require("socks").SocksClient; }
+          catch { SocksClient = require("socks-proxy-agent/node_modules/socks").SocksClient; }
+          SocksClient.createConnection({
+            proxy: {
+              host: proxyHost, port: proxyPort, type: socksType,
+              ...(proxyUser && { userId: proxyUser }),
+              ...(proxyUser && proxyPass && { password: proxyPass }),
+            },
+            command: "connect",
+            destination: { host: targetHost, port: targetPort },
+          }).then((info) => {
+            client.setSocket(info.socket);
+            client.emit("connect");
+          }).catch((err) => {
+            log.error("[Proxy] SOCKS connect failed:", err.message);
+            client.emit("error", err);
+          });
+        };
+      }
+
+      // HTTP / HTTPS — туннелируем через CONNECT
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        const net = require("net");
+        return (client) => {
+          const socket = net.createConnection(proxyPort, proxyHost, () => {
+            const authLine = proxyUser
+              ? `Proxy-Authorization: Basic ${Buffer.from(proxyUser + ":" + proxyPass).toString("base64")}\r\n`
+              : "";
+            socket.write(
+              `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n` +
+              `Host: ${targetHost}:${targetPort}\r\n` +
+              authLine + "\r\n"
+            );
+          });
+          socket.once("data", (data) => {
+            const resp = data.toString();
+            if (resp.includes("200")) {
+              client.setSocket(socket);
+              client.emit("connect");
+            } else {
+              const msg = resp.split("\n")[0] || "HTTP proxy rejected";
+              log.error("[Proxy] HTTP CONNECT failed:", msg);
+              client.emit("error", new Error(msg));
+            }
+          });
+          socket.on("error", (err) => {
+            log.error("[Proxy] socket error:", err.message);
+            client.emit("error", err);
+          });
+        };
+      }
+
+      log.warn("[Proxy] Unknown protocol, ignoring:", parsed.protocol);
+      return null;
+    } catch (err) {
+      log.error("[Proxy] _buildProxyConnect error:", err.message);
+      return null;
+    }
   }
 
   _proxyAgent(proxyStr) {
@@ -267,12 +346,14 @@ class BotManager {
       try { movements.scaffoldingBlocks = []; } catch {}  // не строить scaffolding
       bot.pathfinder.setMovements(movements);
 
-      // Когда сервер принудительно телепортирует бота (rubber-band) — останавливаем pathfinder
+      // forcedMove = сервер поправил позицию (телепорт/спавн/портал).
+      // НЕ ставим кулдаун здесь — это слишком агрессивно и вызывает "полёт".
+      // Rubber-band обрабатывается через паттерны в событии "message" ниже.
       bot.on("forcedMove", () => {
-        try { bot.pathfinder.stop(); } catch {}
         try { bot.clearControlStates(); } catch {}
-        instance._antiCheatCooldownUntil = Date.now() + 4000;
-        log.warn("[BotManager] forcedMove (rubber-band) — 4s cooldown for bot", botId);
+        try { bot.setControlState("jump",   false); } catch {}
+        try { bot.setControlState("sprint", false); } catch {}
+        // Если уже есть активный кулдаун — не перезаписываем, иначе только очищаем состояния
       });
 
       
