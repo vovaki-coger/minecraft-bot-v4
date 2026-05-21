@@ -87,9 +87,10 @@ class TaskManager {
       return;
     }
     this._chat("Иду к тебе, " + target.username + "!");
-    await this.bot.pathfinder.goto(
-      new goals.GoalNear(target.position.x, target.position.y, target.position.z, 2)
-    ).catch(() => {});
+    await this._goto(
+      new goals.GoalNear(target.position.x, target.position.y, target.position.z, 2),
+      300
+    );
     this._chat("Я здесь!");
   }
 
@@ -103,7 +104,7 @@ class TaskManager {
     const deadline = Date.now() + 300_000; // 5 минут максимум
 
     while (this._running && Date.now() < deadline && target.isValid) {
-      await this.bot.pathfinder.goto(new goals.GoalFollow(target, 2)).catch(() => {});
+      await this._goto(new goals.GoalFollow(target, 2), 200);
       await this._sleep(500);
     }
   }
@@ -351,7 +352,7 @@ class TaskManager {
     if (x === undefined || x === null) return;
     const fy = y !== undefined && y !== null ? Math.round(y) : Math.round(this.bot.entity.position.y);
     this._chat("Иду к " + Math.round(x) + " " + fy + " " + Math.round(z));
-    await this.bot.pathfinder.goto(new goals.GoalBlock(Math.round(x), fy, Math.round(z))).catch(() => {});
+    await this._goto(new goals.GoalBlock(Math.round(x), fy, Math.round(z)), 400);
     this._chat("Пришёл!");
   }
 
@@ -361,8 +362,8 @@ class TaskManager {
       const dx = Math.floor(Math.random() * 60 - 30);
       const dz = Math.floor(Math.random() * 60 - 30);
       const p = this.bot.entity.position;
-      await this.bot.pathfinder.goto(new goals.GoalNear(p.x + dx, p.y, p.z + dz, 2)).catch(() => {});
-      await this._sleep(300);
+      await this._goto(new goals.GoalNear(p.x + dx, p.y, p.z + dz, 3), 500);
+      await this._sleep(800);
     }
     this._chat("Исследование завершено!");
   }
@@ -814,6 +815,21 @@ class TaskManager {
   }
 
   _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  // Обёртка над pathfinder.goto с проверкой кулдауна античита
+  // и небольшой случайной задержкой перед движением для большей естественности
+  async _goto(goal, jitterMs = 0) {
+    if (!this.bot?.entity || !this._running) return;
+    // Ждём если сработал античит
+    const cooldownUntil = this.instance._antiCheatCooldownUntil || 0;
+    if (cooldownUntil > Date.now()) {
+      await this._sleep(cooldownUntil - Date.now() + 200);
+    }
+    if (!this._running) return;
+    // Лёгкий случайный джиттер (0–jitterMs мс) для большей естественности
+    if (jitterMs > 0) await this._sleep(Math.floor(Math.random() * jitterMs));
+    await this.bot.pathfinder.goto(goal).catch(() => {});
+  }
 }
 
 // ===================================================================

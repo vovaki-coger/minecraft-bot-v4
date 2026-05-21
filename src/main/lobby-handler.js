@@ -109,8 +109,11 @@ class LobbyHandler {
     const { bot } = this.instance;
     if (!bot?.entity) return;
 
-    // Наличие компаса = признак лобби
-    const LOBBY_ITEMS = ["compass", "clock", "watch", "nether_star", "paper", "book"];
+    // Наличие компаса = признак лобби, но только если нет запрета компаса в конфиге
+    // (компасы часто выдают игрокам для навигации, не только в лобби)
+    if (this.config.disableCompassDetection) return;
+
+    const LOBBY_ITEMS = ["compass", "clock", "watch", "nether_star"];
     const allItems = [...(bot.inventory?.items() || [])];
     for (let s = 36; s <= 44; s++) { const i = bot.inventory?.slots[s]; if (i) allItems.push(i); }
     const lobbyItem = allItems.find(i => LOBBY_ITEMS.includes(i.name));
@@ -118,11 +121,15 @@ class LobbyHandler {
     if (lobbyItem && !this.rankSelected) {
       log.info("[LobbyHandler] Found lobby item:", lobbyItem.name);
       this.inLobby = true;
-      await this._trySelectRank();
+      // Используем компас только если mode явно задан — не идём к NPC автоматически
+      if (this.config.mode === "compass") {
+        await this._trySelectRank();
+      }
       return;
     }
 
-    if ((this.config.mode === "npc" || this.config.mode === "auto") && this.config.npcMode) {
+    // К NPC идём ТОЛЬКО если явно задан mode=npc и npcMode включён
+    if (this.config.mode === "npc" && this.config.npcMode) {
       await this._tryFindAndClickNPC();
     }
   }

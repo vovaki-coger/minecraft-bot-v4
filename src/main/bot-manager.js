@@ -238,21 +238,29 @@ class BotManager {
           }).catch(() => {});
         }
 
+        // ИСПРАВЛЕНО: передаём mineflayer-бот и конфиг (не instance и не ollamaManager)
         instance.aiBrain = new AIBrain(
-          instance,
+          bot,
+          instance.config,
           this.ollamaManager,
-          instance.taskManager,
-          this.emit
+          this.emit,
+          botId
         );
-        instance.aiBrain.startAutonomous(10000);
+        instance.aiBrain.taskManager = instance.taskManager;
+        // Автономный режим запускаем только если явно включён в конфиге
+        if (instance.config.autonomousMode) {
+          instance.aiBrain.startAutonomous(instance.config.autonomousIntervalMs || 20000);
+        }
         log.info("[BotManager] AIBrain started for bot", botId);
       }
 
       const movements = new Movements(bot);
       movements.allowSprinting = false;
-      movements.canDig = true;
+      movements.canDig = false;          // не копать при обходе — подозрительно для античита
       movements.allow1by1towers = false;
-      // Не ходить по воде — делаем жидкость очень дорогой для паттфайндера
+      movements.allowParkour = false;    // паркур = читерство для большинства античитов
+      movements.canOpenDoors = true;
+      try { movements.maxDropDown = 2; } catch {}  // не прыгать с большой высоты
       try { movements.liquidCost = 100; } catch {}
       try { movements.waterCost = 100; } catch {}
       bot.pathfinder.setMovements(movements);
@@ -390,11 +398,22 @@ class BotManager {
       // Сообщаем лобби-хандлеру
       instance.lobbyHandler?.onChatMessage(text);
 
-      // Если сервер прислал HALTED / Invalid move — немедленно останавливаем движение
-      if (text.includes("HALTED") || text.includes("Invalid move") || text.includes("moved too quickly")) {
+      // Если сервер прислал сообщение от античита — останавливаем движение с кулдауном
+      const ANTICHEAT_PATTERNS = [
+        "HALTED", "Invalid move", "moved too quickly", "Moved wrongly",
+        "You moved too fast", "illegal move", "Illegal stance",
+        "нарушение", "читер", "подозрительное движение",
+      ];
+      if (ANTICHEAT_PATTERNS.some(p => text.toLowerCase().includes(p.toLowerCase()))) {
         try { bot.clearControlStates(); } catch {}
         try { bot.pathfinder.stop(); } catch {}
-        log.warn("[BotManager] Anti-cheat triggered, movement stopped for bot", botId);
+        // Кулдаун: запрещаем движение на 3 секунды, потом разрешаем снова
+        instance._antiCheatCooldownUntil = Date.now() + 3000;
+        log.warn("[BotManager] Anti-cheat triggered, 3s cooldown for bot", botId);
+        setTimeout(() => {
+          log.info("[BotManager] Anti-cheat cooldown ended for bot", botId);
+          instance._antiCheatCooldownUntil = 0;
+        }, 3000);
       }
     });
 
