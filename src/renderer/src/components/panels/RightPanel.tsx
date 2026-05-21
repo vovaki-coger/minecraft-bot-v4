@@ -7,31 +7,60 @@ interface Props {
 
 type ChatTab = "minecraft" | "ai";
 
+function useChatScroll(dep: unknown) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const userScrolledUp = useRef(false);
+  const [hasNewMsg, setHasNewMsg] = useState(false);
+
+  const onScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distFromBottom < 40) {
+      userScrolledUp.current = false;
+      setHasNewMsg(false);
+    } else {
+      userScrolledUp.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [onScroll]);
+
+  useEffect(() => {
+    if (!userScrolledUp.current) {
+      const el = containerRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      setHasNewMsg(false);
+    } else {
+      setHasNewMsg(true);
+    }
+  }, [dep]);
+
+  const scrollToBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    userScrolledUp.current = false;
+    setHasNewMsg(false);
+  }, []);
+
+  return { containerRef, hasNewMsg, scrollToBottom };
+}
+
 export default function RightPanel({ bot }: Props) {
   const [input, setInput] = useState("");
   const [aiInput, setAiInput] = useState("");
   const [activeTab, setActiveTab] = useState<ChatTab>("minecraft");
   const [autoResponse, setAutoResponse] = useState(false);
   const [lobbyLoading, setLobbyLoading] = useState(false);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const aiChatContainerRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = useCallback((ref: React.RefObject<HTMLDivElement>) => {
-    const el = ref.current;
-    if (!el) return;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distFromBottom < 120) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, []);
-
-  useEffect(() => {
-    scrollToBottom(chatContainerRef);
-  }, [bot?.chatHistory, scrollToBottom]);
-
-  useEffect(() => {
-    scrollToBottom(aiChatContainerRef);
-  }, [bot?.aiChatHistory, scrollToBottom]);
+  const mc = useChatScroll(bot?.chatHistory?.length);
+  const ai = useChatScroll(bot?.aiChatHistory?.length);
 
   useEffect(() => {
     if (bot) {
@@ -77,23 +106,23 @@ export default function RightPanel({ bot }: Props) {
 
   function getMsgColor(type: ChatMessage["type"]) {
     switch (type) {
-      case "user": return "#7fb3d3";
-      case "player": return "#e8e8e8";
-      case "bot": return "#7ecc49";
-      case "ai": return "#c084fc";
-      case "system": return "#888888";
-      case "server": return "#bdc3c7";
+      case "user":     return "#7fb3d3";
+      case "player":   return "#e8e8e8";
+      case "bot":      return "#7ecc49";
+      case "ai":       return "#c084fc";
+      case "system":   return "#888888";
+      case "server":   return "#bdc3c7";
       case "survivor": return "#e67e22";
-      default: return "#e8e8e8";
+      default:         return "#e8e8e8";
     }
   }
 
   function getAIMsgColor(type: ChatMessage["type"]) {
     switch (type) {
-      case "user": return "#7fb3d3";
-      case "ai": return "#c084fc";
+      case "user":   return "#7fb3d3";
+      case "ai":     return "#c084fc";
       case "system": return "#888888";
-      default: return "#e8e8e8";
+      default:       return "#e8e8e8";
     }
   }
 
@@ -168,22 +197,39 @@ export default function RightPanel({ bot }: Props) {
             </div>
           </div>
 
-          <div
-            ref={chatContainerRef}
-            className="flex-1 overflow-y-auto p-2"
-            style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
-          >
-            {mcMessages.length === 0 ? (
-              <div className="text-center mt-8" style={{ color: "#555" }}>
-                {bot ? "Сообщений нет" : "Выберите бота"}
-              </div>
-            ) : (
-              mcMessages.map((msg, i) => (
-                <div key={i} className="mb-0.5">
-                  <span style={{ color: "#555", marginRight: 4 }}>[{formatTime(msg.timestamp)}]</span>
-                  <span style={{ color: getMsgColor(msg.type) }}>{msg.text}</span>
+          <div style={{ flex: 1, position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div
+              ref={mc.containerRef}
+              className="flex-1 overflow-y-auto p-2"
+              style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
+            >
+              {mcMessages.length === 0 ? (
+                <div className="text-center mt-8" style={{ color: "#555" }}>
+                  {bot ? "Сообщений нет" : "Выберите бота"}
                 </div>
-              ))
+              ) : (
+                mcMessages.map((msg, i) => (
+                  <div key={i} className="mb-0.5">
+                    <span style={{ color: "#555", marginRight: 4 }}>[{formatTime(msg.timestamp)}]</span>
+                    <span style={{ color: getMsgColor(msg.type) }}>{msg.text}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            {mc.hasNewMsg && (
+              <button
+                onClick={mc.scrollToBottom}
+                style={{
+                  position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)",
+                  background: "rgba(126,204,73,0.15)", border: "1px solid rgba(126,204,73,0.5)",
+                  borderRadius: 12, padding: "3px 12px", cursor: "pointer",
+                  color: "#7ecc49", fontSize: 11, fontFamily: "monospace",
+                  zIndex: 10, whiteSpace: "nowrap",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
+                }}
+              >
+                ↓ новые сообщения
+              </button>
             )}
           </div>
 
@@ -218,30 +264,47 @@ export default function RightPanel({ bot }: Props) {
             </p>
           </div>
 
-          <div
-            ref={aiChatContainerRef}
-            className="flex-1 overflow-y-auto p-2"
-            style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
-          >
-            {aiMessages.length === 0 ? (
-              <div className="text-center mt-8" style={{ color: "#555" }}>
-                {bot ? (
-                  <>
-                    <p>ИИ-чат пуст</p>
-                    <p className="mt-1 text-xs" style={{ color: "#444" }}>Сообщения здесь не видны в игре</p>
-                  </>
-                ) : "Выберите бота"}
-              </div>
-            ) : (
-              aiMessages.map((msg, i) => (
-                <div key={i} className="mb-1">
-                  <span style={{ color: "#555", marginRight: 4 }}>[{formatTime(msg.timestamp)}]</span>
-                  <span style={{ color: "#888", marginRight: 4 }}>
-                    {msg.type === "user" ? "[Вы]" : msg.type === "ai" ? "[ИИ]" : "[Сис]"}
-                  </span>
-                  <span style={{ color: getAIMsgColor(msg.type) }}>{msg.text}</span>
+          <div style={{ flex: 1, position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div
+              ref={ai.containerRef}
+              className="flex-1 overflow-y-auto p-2"
+              style={{ fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.5, minHeight: 0 }}
+            >
+              {aiMessages.length === 0 ? (
+                <div className="text-center mt-8" style={{ color: "#555" }}>
+                  {bot ? (
+                    <>
+                      <p>ИИ-чат пуст</p>
+                      <p className="mt-1 text-xs" style={{ color: "#444" }}>Сообщения здесь не видны в игре</p>
+                    </>
+                  ) : "Выберите бота"}
                 </div>
-              ))
+              ) : (
+                aiMessages.map((msg, i) => (
+                  <div key={i} className="mb-1">
+                    <span style={{ color: "#555", marginRight: 4 }}>[{formatTime(msg.timestamp)}]</span>
+                    <span style={{ color: "#888", marginRight: 4 }}>
+                      {msg.type === "user" ? "[Вы]" : msg.type === "ai" ? "[ИИ]" : "[Сис]"}
+                    </span>
+                    <span style={{ color: getAIMsgColor(msg.type) }}>{msg.text}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            {ai.hasNewMsg && (
+              <button
+                onClick={ai.scrollToBottom}
+                style={{
+                  position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)",
+                  background: "rgba(192,132,252,0.15)", border: "1px solid rgba(192,132,252,0.5)",
+                  borderRadius: 12, padding: "3px 12px", cursor: "pointer",
+                  color: "#c084fc", fontSize: 11, fontFamily: "monospace",
+                  zIndex: 10, whiteSpace: "nowrap",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
+                }}
+              >
+                ↓ новые сообщения
+              </button>
             )}
           </div>
 
