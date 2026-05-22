@@ -881,19 +881,20 @@ class TaskManager {
       await this._sleep(cooldownUntil - Date.now() + 200);
     }
     if (!this._running) return;
-    // Лёгкий случайный джиттер (0–jitterMs мс) для большей естественности
+    // Лёгкий случайный джиттер
     if (jitterMs > 0) await this._sleep(Math.floor(Math.random() * jitterMs));
-    // Ждём приземления перед движением — Grim/Matrix проверяют onGround
-    if (this.bot.entity && !this.bot.entity.onGround) {
-      for (let i = 0; i < 10; i++) {
-        await this._sleep(50);
-        if (this.bot.entity.onGround) break;
-      }
-    }
-    await this.bot.pathfinder.goto(goal).catch(() => {});
-    // Ждём 3 тика после прибытия — сервер обрабатывает позицию до следующего движения
-    try { await this.bot.waitForTicks(3); } catch {}
-    await this._sleep(60 + Math.floor(Math.random() * 80));
+    // УБРАН onGround-чек — на неровном рельефе mineflayer может не сообщать
+    // onGround=true никогда (ступени, слябы, плиты) → бот замирал навсегда.
+    //
+    // Таймаут 15с предотвращает бесконечное зависание при недостижимой цели.
+    // pathfinder.goto без таймаута может висеть часами если цель заблокирована.
+    await Promise.race([
+      this.bot.pathfinder.goto(goal),
+      this._sleep(15000),
+    ]).catch(() => {});
+    // 2 тика паузы — сервер принимает позицию перед следующим пакетом движения
+    try { await this.bot.waitForTicks(2); } catch {}
+    await this._sleep(50 + Math.floor(Math.random() * 60));
   }
 }
 

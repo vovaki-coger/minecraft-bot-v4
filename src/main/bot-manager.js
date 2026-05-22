@@ -161,14 +161,15 @@ class BotManager {
       // Маскируем пакеты только для публичных серверов.
       // Для localhost/127.0.0.1 маскировка не нужна — задержка settings
       // может нарушить быстрое рукопожатие локального сервера.
-      const isLocalServer = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$/i.test(opts.host || "");
+      // Для локальных адресов (localhost, LAN 192.168.x.x, 10.x.x.x и т.д.)
+      // отключаем все патчи пакетов — они ломают handshake с быстрым local-сервером.
+      const isLocalServer = this._isLocalHost(opts.host);
       if (!isLocalServer) {
         initLoginMasking(instance.bot);
+        setupLoadingTerrainHandler(instance.bot);
       } else {
-        log.info("[BotManager] Локальный сервер — маскировка пакетов отключена");
+        log.info("[BotManager] Локальный сервер (" + opts.host + ") — маскировка и terrain-handler отключены");
       }
-      // Подтверждаем position-пакеты во время загрузки мира (до spawn)
-      setupLoadingTerrainHandler(instance.bot);
       this._attachEvents(instance);
       return { success: true };
     } catch (err) {
@@ -379,7 +380,7 @@ class BotManager {
       }
 
       const movements = new Movements(bot);
-      movements.allowSprinting = true;       // спринт включён; patchSprintDelay имитирует задержку нажатия Ctrl
+      movements.allowSprinting = false;      // спринт = "moved too quickly" на GrimAC/Vulcan/Intave; ходьба безопасна
       movements.canDig = false;              // не копать при обходе
       movements.allow1by1towers = false;     // не строить башни
       movements.allowParkour = false;        // паркур = читерство для большинства античитов
@@ -560,6 +561,8 @@ class BotManager {
     });
 
     bot.on("kicked", (reason) => {
+      // Stale-guard: если бот уже заменён новым (transfer) — не трогаем статус
+      if (instance.bot !== bot) return;
       instance.status = "offline";
       instance.agentLoop?.stop();
       instance.agentLoop = null;
@@ -573,6 +576,8 @@ class BotManager {
     });
 
     bot.on("end", (reason) => {
+      // Stale-guard: старый бот после transfer не должен сбрасывать статус нового
+      if (instance.bot !== bot) return;
       instance.status = "offline";
       instance.agentLoop?.stop();
       instance.agentLoop = null;
@@ -688,9 +693,17 @@ class BotManager {
       }
     });
     bot.on("error", (err) => {
+      if (instance.bot !== bot) return; // stale guard
       log.error("Bot " + botId + " error:", err.message);
       this.emit("bot:error", { botId, error: err.message });
     });
+  }
+
+  // Определяет является ли хост локальным (localhost, loopback, LAN RFC1918)
+  // Для таких адресов отключаем маскировку пакетов — она ломает локальный handshake.
+  _isLocalHost(host) {
+    if (!host) return false;
+    return /^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|::1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/.test(host.trim());
   }
 
   // ── Первоначальная авто-аутентификация при спавне ─────────────────────────

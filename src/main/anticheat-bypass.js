@@ -83,6 +83,12 @@ async function safeDig(bot, block, opts) {
     }
   } catch {}
 
+  // ── Машем рукой (arm_animation) — большинство античитов требуют этот пакет ──
+  // GrimAC/Intave проверяют: перед разрушением должен быть sent arm_animation.
+  // Без него — "hitting air" (сервер отбрасывает пакет).
+  try { bot.swingArm(); } catch {}
+  await sleep(randInt(30, 60));
+
   // ── Копаем ──
   try {
     await bot.dig(refreshed);
