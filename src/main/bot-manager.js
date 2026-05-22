@@ -158,8 +158,15 @@ class BotManager {
     try {
       const opts = this._buildOptions(instance.config);
       instance.bot = mineflayer.createBot(opts);
-      // Маскируем пакеты СРАЗУ после создания бота, до начала login-последовательности
-      initLoginMasking(instance.bot);
+      // Маскируем пакеты только для публичных серверов.
+      // Для localhost/127.0.0.1 маскировка не нужна — задержка settings
+      // может нарушить быстрое рукопожатие локального сервера.
+      const isLocalServer = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$/i.test(opts.host || "");
+      if (!isLocalServer) {
+        initLoginMasking(instance.bot);
+      } else {
+        log.info("[BotManager] Локальный сервер — маскировка пакетов отключена");
+      }
       // Подтверждаем position-пакеты во время загрузки мира (до spawn)
       setupLoadingTerrainHandler(instance.bot);
       this._attachEvents(instance);
@@ -372,7 +379,7 @@ class BotManager {
       }
 
       const movements = new Movements(bot);
-      movements.allowSprinting = false;      // спринт — главный триггер "moved too quickly"
+      movements.allowSprinting = true;       // спринт включён; patchSprintDelay имитирует задержку нажатия Ctrl
       movements.canDig = false;              // не копать при обходе
       movements.allow1by1towers = false;     // не строить башни
       movements.allowParkour = false;        // паркур = читерство для большинства античитов

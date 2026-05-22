@@ -5,7 +5,7 @@
 const { goals } = require("mineflayer-pathfinder");
 const log = require("electron-log");
 const Vec3 = require("vec3");
-const { safeDig, safeGoto, smoothLookAt, randInt, sleep: acSleep } = require("./anticheat-bypass");
+const { safeDig, safeGoto, smoothLookAt, randomHitboxPoint, randInt, sleep: acSleep } = require("./anticheat-bypass");
 
 class TaskManager {
   constructor(botInstance, emit) {
@@ -178,10 +178,17 @@ class TaskManager {
       );
       if (entity) {
         this._chat("Нашёл " + name + ", атакую!");
-        for (let i = 0; i < 8 && this._running && entity.isValid; i++) {
-          await this.bot.pathfinder.goto(new goals.GoalFollow(entity, 1)).catch(() => {});
+        for (let i = 0; i < 10 && this._running && entity.isValid; i++) {
+          // Подходим если далеко
+          if (entity.position.distanceTo(this.bot.entity.position) > 3.5) {
+            await this.bot.pathfinder.goto(new goals.GoalFollow(entity, 1)).catch(() => {});
+          }
+          if (!this._running || !entity.isValid) break;
+          // Смотрим на моба перед ударом
+          const hitPoint = randomHitboxPoint(entity);
+          if (hitPoint) await smoothLookAt(this.bot, hitPoint, true);
           this.bot.attack(entity);
-          await this._sleep(600);
+          await this._sleep(625 + randInt(-20, 50));
         }
         return;
       }
@@ -336,12 +343,63 @@ class TaskManager {
       return;
     }
     this._chat("Атакую " + (entity.displayName || entity.name) + "!");
-    while (this._running && entity.isValid && entity.health > 0) {
-      await this.bot.pathfinder.goto(new goals.GoalFollow(entity, 2)).catch(() => {});
+
+    // Кулдаун атаки зависит от оружия в руке (система 1.9+)
+    const heldName = this.bot.heldItem?.name || "";
+    const atkCooldown = heldName.includes("sword") ? 625
+      : heldName.includes("axe") ? 1000
+      : 250;
+
+    while (this._running && entity.isValid) {
+      // Подходим только если моб далеко — иначе pathfinder топчется на месте
+      const dist = entity.position.distanceTo(this.bot.entity.position);
+      if (dist > 3.5) {
+        await this.bot.pathfinder.goto(new goals.GoalFollow(entity, 2)).catch(() => {});
+      }
+      if (!this._running || !entity.isValid) break;
+
+      // Смотрим на случайную точку хитбокса (как живой игрок)
+      const hitPoint = randomHitboxPoint(entity);
+      if (hitPoint) await smoothLookAt(this.bot, hitPoint, true);
+
       this.bot.attack(entity);
-      await this._sleep(500);
+      await this._sleep(atkCooldown + randInt(-25, 50));
     }
-    this._chat((entity.displayName || entity.name) + " побеждён!");
+    this._chat(entity.isValid
+      ? "Атака завершена"
+      : (entity.displayName || entity.name) + " побеждён!");
+  }
+
+  async _taskPvpAttack(targetName) {
+    const entity = this._findPlayer(targetName);
+    if (!entity) {
+      this._chat("Не вижу игрока " + (targetName || "") + " рядом");
+      return;
+    }
+    this._chat("⚔ PvP: атакую " + entity.username + "!");
+
+    const heldName = this.bot.heldItem?.name || "";
+    const atkCooldown = heldName.includes("sword") ? 625
+      : heldName.includes("axe") ? 1000
+      : 250;
+
+    let hits = 0;
+    while (this._running && entity.isValid) {
+      const dist = entity.position.distanceTo(this.bot.entity.position);
+      if (dist > 3.5) {
+        await this.bot.pathfinder.goto(new goals.GoalFollow(entity, 2)).catch(() => {});
+      }
+      if (!this._running || !entity.isValid) break;
+
+      const hitPoint = randomHitboxPoint(entity);
+      if (hitPoint) await smoothLookAt(this.bot, hitPoint, true);
+
+      this.bot.attack(entity);
+      hits++;
+      if (hits % 10 === 0) this._log("PvP: нанесено " + hits + " ударов");
+      await this._sleep(atkCooldown + randInt(-25, 60));
+    }
+    this._chat("PvP завершён (" + hits + " ударов)");
   }
 
   async _taskWalkTo(x, y, z) {

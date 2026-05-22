@@ -45,12 +45,19 @@ function isInReach(bot, blockPosition, maxReach) {
   return dist <= (maxReach || MAX_REACH);
 }
 
-// ── Безопасное копание с проверкой позиции ───────────────────────────────────
-
+// ── Безопасное копание с взглядом на блок ────────────────────────────────────
+//
+// Перед копанием бот:
+//   1. Смотрит на центр блока (как человек)
+//   2. Проверяет прямую видимость (line of sight) через bot.canSeeBlock
+//   3. Копает с задержкой между action-пакетами
+//
 async function safeDig(bot, block, opts) {
   if (!block || !bot.entity) return false;
   opts = opts || {};
   const reach = opts.reach || MAX_REACH;
+
+  // Берём актуальный блок по координатам (мог смениться пока шли к нему)
   const refreshed = bot.blockAt(block.position);
   if (!refreshed || refreshed.name === "air" || refreshed.name === "cave_air") return false;
   if (!isInReach(bot, refreshed.position, reach)) {
@@ -58,7 +65,25 @@ async function safeDig(bot, block, opts) {
       bot.entity.position.distanceTo(refreshed.position).toFixed(2) + " блоков)");
     return false;
   }
-  await sleep(randInt(45, 65));
+
+  // ── Смотрим на центр блока перед копанием ──
+  // Человек всегда смотрит на блок который копает.
+  // Без lookAt бот отправляет dig-пакет НЕ глядя на блок → античит/сервер
+  // регистрирует "hit air" и блок не разрушается.
+  const center = refreshed.position.offset(0.5, 0.5, 0.5);
+  await smoothLookAt(bot, center, false);
+  await sleep(randInt(55, 90));
+
+  // ── Проверяем видимость (line of sight) ──
+  // Если блок за другим блоком — не копаем, идём ближе.
+  try {
+    if (typeof bot.canSeeBlock === "function" && !bot.canSeeBlock(refreshed)) {
+      log.debug("[AnticheatBypass] safeDig: блок не виден (нет LOS)");
+      return false;
+    }
+  } catch {}
+
+  // ── Копаем ──
   try {
     await bot.dig(refreshed);
     await sleep(randInt(50, 120));
@@ -188,6 +213,8 @@ function setupForcedMoveHandler(bot, instance) {
 // ── Маскировка пакетов при входе на сервер ───────────────────────────────────
 //
 // Вызывается СРАЗУ после mineflayer.createBot(), ДО _attachEvents.
+// НЕ вызывается для localhost/127.0.0.1 — локальному серверу маскировка
+// не нужна и задержка settings может мешать быстрому локальному подключению.
 //
 // Что делает:
 //   1. brand "mineflayer" → "vanilla"
