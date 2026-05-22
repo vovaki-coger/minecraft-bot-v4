@@ -1,12 +1,13 @@
 /**
- * AnticheatBypass — модуль обхода античита для Mineflayer-ботов.
+ * AnticheatBypass — обход античита для Mineflayer-ботов.
  *
  * Фиксит:
- *  - "Фантомные координаты": бот пытается копать блок на расстоянии >4.5 блоков
- *    после того как античит откатил его позицию (rubber-band)
+ *  - "Фантомные координаты": копание блока после rubber-band откатa позиции
  *  - Идеальные тайминги движения, поворота, кликов
  *  - Мгновенное ускорение/торможение без инерции
- *  - Ровный интервал пакетов движения без джиттера
+ *  - Детектируемый brand "mineflayer" → маскируем в "vanilla"
+ *  - Мгновенный settings-пакет → задерживаем 450–1250мс + рандомизируем
+ *  - Стационарный начальный взгляд → добавляем случайный осмотр после спавна
  */
 
 const log = require("electron-log");
@@ -30,11 +31,6 @@ function sleep(ms) {
 
 // ── Проверка дистанции до блока ──────────────────────────────────────────────
 
-/**
- * Возвращает true если бот находится достаточно близко к блоку чтобы взаимодействовать.
- * Это главный фикс "фантомных координат": если античит откатил позицию бота,
- * расстояние будет > MAX_REACH и копание будет отвергнуто до движения к блоку.
- */
 function isInReach(bot, blockPosition, maxReach) {
   if (!bot.entity || !blockPosition) return false;
   const dist = bot.entity.position.distanceTo(blockPosition);
@@ -43,29 +39,18 @@ function isInReach(bot, blockPosition, maxReach) {
 
 // ── Безопасное копание с проверкой позиции ───────────────────────────────────
 
-/**
- * Безопасный dig: проверяет что бот реально рядом с блоком перед копанием.
- * Если нет — возвращает false вместо того чтобы копать "призрак".
- * Добавляет случайную задержку между кликами (45–65мс) вместо ровных 50мс.
- */
 async function safeDig(bot, block, opts) {
   if (!block || !bot.entity) return false;
-
   opts = opts || {};
   const reach = opts.reach || MAX_REACH;
-
   const refreshed = bot.blockAt(block.position);
   if (!refreshed || refreshed.name === "air" || refreshed.name === "cave_air") return false;
-
   if (!isInReach(bot, refreshed.position, reach)) {
     log.debug("[AnticheatBypass] safeDig: out of reach (" +
-      bot.entity.position.distanceTo(refreshed.position).toFixed(2) + " блоков), пропускаю");
+      bot.entity.position.distanceTo(refreshed.position).toFixed(2) + " блоков)");
     return false;
   }
-
-  // Случайная задержка перед кликом (имитация человека)
   await sleep(randInt(45, 65));
-
   try {
     await bot.dig(refreshed);
     await sleep(randInt(50, 120));
@@ -78,36 +63,22 @@ async function safeDig(bot, block, opts) {
 
 // ── Плавный поворот головы ───────────────────────────────────────────────────
 
-/**
- * Плавно поворачивает голову бота за 3–5 тиков вместо мгновенного.
- * Добавляет микродрожание ±0.5° для имитации мыши.
- */
 async function smoothLookAt(bot, targetPos, force) {
   if (!bot.entity || !targetPos) return;
-
   const steps = force ? 1 : randInt(LOOK_STEPS - 1, LOOK_STEPS + 1);
   const eyePos = bot.entity.position.offset(0, 1.62, 0);
-
   const dx = targetPos.x - eyePos.x;
   const dy = targetPos.y - eyePos.y;
   const dz = targetPos.z - eyePos.z;
-
   const targetYaw   = Math.atan2(-dx, dz);
   const targetPitch = Math.atan2(-dy, Math.sqrt(dx * dx + dz * dz));
-
   const startYaw   = bot.entity.yaw;
   const startPitch = bot.entity.pitch;
-
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    const jitterY = randFloat(-0.009, 0.009);
-    const jitterP = randFloat(-0.009, 0.009);
-
-    let yaw   = startYaw   + (targetYaw   - startYaw)   * t + jitterY;
-    let pitch = startPitch + (targetPitch - startPitch) * t + jitterP;
-
+    let yaw   = startYaw   + (targetYaw   - startYaw)   * t + randFloat(-0.009, 0.009);
+    let pitch = startPitch + (targetPitch - startPitch) * t + randFloat(-0.009, 0.009);
     pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
-
     await bot.look(yaw, pitch, force || false).catch(() => {});
     await sleep(randInt(45, 55));
   }
@@ -115,41 +86,21 @@ async function smoothLookAt(bot, targetPos, force) {
 
 // ── Случайная точка внутри хитбокса моба ────────────────────────────────────
 
-/**
- * Возвращает случайную точку внутри хитбокса entity (±0.1 блока от центра).
- * Имитирует "не идеальный" прицел как у живого игрока.
- */
 function randomHitboxPoint(entity) {
   if (!entity || !entity.position) return null;
   const h = (entity.height || 1.8) * (0.75 + randFloat(-0.05, 0.1));
-  return entity.position.offset(
-    randFloat(-0.1, 0.1),
-    h,
-    randFloat(-0.1, 0.1)
-  );
+  return entity.position.offset(randFloat(-0.1, 0.1), h, randFloat(-0.1, 0.1));
 }
 
 // ── Патч пакетов движения (джиттер позиции и таймингов) ──────────────────────
 
-/**
- * Патчит отправку position-пакетов бота:
- * - Округляет координаты до 3 знаков (не ровные целые)
- * - Добавляет ±2–5 мс задержку к интервалу (имитация пинга 30–100 мс)
- *
- * Вызывается один раз при подключении бота.
- */
 function patchMovementPackets(bot) {
   try {
     const client = bot._client;
     if (!client) return;
-
     const origWrite = client.write.bind(client);
     client.write = function(name, data) {
-      if (
-        name === "position" ||
-        name === "position_look" ||
-        name === "look"
-      ) {
+      if (name === "position" || name === "position_look" || name === "look") {
         if (data.x !== undefined) {
           data.x = Math.round(data.x * 1000) / 1000 + randFloat(-0.001, 0.001);
           data.y = Math.round(data.y * 1000) / 1000;
@@ -171,17 +122,12 @@ function patchMovementPackets(bot) {
 
 // ── Патч спринта — задержка 1–2 тика перед включением ───────────────────────
 
-/**
- * Добавляет задержку перед включением спринта (1–2 тика = 50–100мс).
- * Vanilla игрок не включает sprint мгновенно при нажатии W.
- */
 function patchSprintDelay(bot) {
   try {
     const origSetControl = bot.setControlState.bind(bot);
     bot.setControlState = function(control, state) {
       if (control === "sprint" && state === true) {
-        const delay = randInt(50, 100);
-        setTimeout(() => origSetControl(control, state), delay);
+        setTimeout(() => origSetControl(control, state), randInt(50, 100));
         return;
       }
       origSetControl(control, state);
@@ -192,53 +138,114 @@ function patchSprintDelay(bot) {
   }
 }
 
-// ── Обработчик rubber-band (откат сервером позиции) ──────────────────────────
+// ── Обработчик rubber-band ────────────────────────────────────────────────────
 
-/**
- * Правильный обработчик forcedMove:
- * - Останавливает всё движение
- * - Ждёт пока позиция стабилизируется (2 тика без изменений)
- * - Только потом разрешает новые действия
- */
 function setupForcedMoveHandler(bot, instance) {
   let _forcedMoveTimer = null;
-
   bot.on("forcedMove", () => {
     try { bot.pathfinder?.stop(); } catch {}
     try { bot.clearControlStates(); } catch {}
     try { bot.setControlState("jump",   false); } catch {}
     try { bot.setControlState("sprint", false); } catch {}
-
     instance._antiCheatCooldownUntil = Date.now() + 1200;
-
     if (_forcedMoveTimer) clearTimeout(_forcedMoveTimer);
     _forcedMoveTimer = setTimeout(() => {
       if (instance._antiCheatCooldownUntil > 0 && Date.now() < instance._antiCheatCooldownUntil) {
         instance._antiCheatCooldownUntil = 0;
       }
     }, 1300);
-
-    log.debug("[AnticheatBypass] forcedMove: позиция синхронизирована, кулдаун 1.2с");
+    log.debug("[AnticheatBypass] forcedMove: кулдаун 1.2с");
   });
 }
 
-// ── goto с проверкой кулдауна + верификацией позиции ─────────────────────────
+// ── Маскировка пакетов при входе ─────────────────────────────────────────────
+//
+// Вызывается СРАЗУ после mineflayer.createBot(), ДО _attachEvents.
+// Перехватывает client.write и:
+//   • brand "mineflayer" → "vanilla"
+//   • settings-пакет задерживается на 450–1250 мс, locale/viewDistance рандомизируются
+//
+function initLoginMasking(bot) {
+  try {
+    const client = bot._client;
+    if (!client) {
+      // _client устанавливается синхронно — если его нет, ждём один тик
+      setTimeout(() => initLoginMasking(bot), 10);
+      return;
+    }
 
-/**
- * Безопасный goto: ждёт окончания античит-кулдауна, затем идёт к цели.
- * После прихода верифицирует что бот реально достиг точки назначения.
- *
- * @returns {boolean} true если добрались, false если кулдаун или ошибка
- */
+    const origWrite = client.write.bind(client);
+    let brandMasked    = false;
+    let settingsMasked = false;
+
+    client.write = function(name, data) {
+
+      // ── 1. Brand: "mineflayer" → "vanilla" ────────────────────────────────
+      if (!brandMasked &&
+          (name === "plugin_message" || name === "custom_payload") &&
+          data?.channel === "minecraft:brand") {
+        brandMasked = true;
+        const brand = "vanilla";
+        const buf = Buffer.allocUnsafe(1 + brand.length);
+        buf[0] = brand.length;           // varint (1 байт для коротких строк)
+        buf.write(brand, 1, "utf8");
+        log.info("[LoginMask] brand: mineflayer → vanilla");
+        return origWrite(name, { ...data, data: buf });
+      }
+
+      // ── 2. Settings: задержка + рандом ────────────────────────────────────
+      if (!settingsMasked && name === "settings") {
+        settingsMasked = true;
+        const delay   = randInt(450, 1250);
+        const locales = ["en_US", "ru_RU", "uk_UA", "en_GB", "de_DE"];
+        const patched = {
+          ...data,
+          locale:       locales[randInt(0, locales.length - 1)],
+          viewDistance: randInt(7, 12),
+          chatMode:     0,
+          chatColors:   true,
+          skinParts:    randInt(121, 127),   // не идеальный 127
+          mainHand:     1,
+        };
+        log.info(`[LoginMask] settings delayed ${delay}ms | locale=${patched.locale} view=${patched.viewDistance}`);
+        setTimeout(() => { try { origWrite(name, patched); } catch {} }, delay);
+        return;  // не отправляем немедленно
+      }
+
+      origWrite(name, data);
+    };
+
+    log.info("[LoginMask] Маскировка пакетов входа активирована");
+  } catch (err) {
+    log.warn("[LoginMask] initLoginMasking error:", err.message);
+  }
+}
+
+// ── Случайный осмотр после спавна ────────────────────────────────────────────
+//
+// 2–4 случайных поворота головы в первые 2–4 секунды.
+// Вызывается из spawn-обработчика в bot-manager.
+//
+async function doSpawnLookAround(bot) {
+  try {
+    const turns = randInt(2, 4);
+    for (let i = 0; i < turns; i++) {
+      await sleep(randInt(350, 950));
+      if (!bot.entity) return;
+      await bot.look(randFloat(-Math.PI, Math.PI), randFloat(-0.4, 0.3), false).catch(() => {});
+    }
+  } catch {}
+}
+
+// ── safeGoto ──────────────────────────────────────────────────────────────────
+
 async function safeGoto(bot, instance, goal, timeoutMs) {
   timeoutMs = timeoutMs || 15000;
-
   if (instance._antiCheatCooldownUntil && Date.now() < instance._antiCheatCooldownUntil) {
     const wait = instance._antiCheatCooldownUntil - Date.now();
     log.debug("[AnticheatBypass] safeGoto: ждём кулдаун " + wait + "мс");
     await sleep(wait + randInt(50, 150));
   }
-
   try {
     await Promise.race([
       bot.pathfinder.goto(goal),
@@ -247,18 +254,15 @@ async function safeGoto(bot, instance, goal, timeoutMs) {
     await sleep(randInt(80, 150));
     return true;
   } catch (err) {
-    if (err.message !== "goto timeout") {
-      log.debug("[AnticheatBypass] safeGoto error:", err.message);
-    }
+    if (err.message !== "goto timeout") log.debug("[AnticheatBypass] safeGoto error:", err.message);
     return false;
   }
 }
 
-// ── Инициализация всего античит-модуля ───────────────────────────────────────
-
-/**
- * Применяет все патчи к боту. Вызывается один раз в spawn-обработчике.
- */
+// ── Инициализация движения/спринта/forcedMove ─────────────────────────────────
+//
+// Вызывается в spawn-обработчике (после initLoginMasking).
+//
 function initAnticheatBypass(bot, instance) {
   patchMovementPackets(bot);
   patchSprintDelay(bot);
@@ -268,6 +272,8 @@ function initAnticheatBypass(bot, instance) {
 
 module.exports = {
   initAnticheatBypass,
+  initLoginMasking,
+  doSpawnLookAround,
   safeDig,
   safeGoto,
   smoothLookAt,

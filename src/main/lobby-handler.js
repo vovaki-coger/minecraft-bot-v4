@@ -1,10 +1,11 @@
 /**
- * LobbyHandler v4.2 — автовыбор анки/ранга в лобби.
- * Исправления v4.2:
- *  - Надёжная очистка всех таймеров в stop()
- *  - Проверка статуса бота перед кликом (после переброски на игровой сервер)
- *  - Проверка instance.status !== "online" после задержки ожидания окна
- *  - bot.on("respawn") для сброса rankSelected при смене сервера
+ * LobbyHandler v4.3 — автовыбор анки/ранга в лобби.
+ *
+ * Исправления v4.3:
+ *  - _onRespawn не сбрасывает rankSelected если ранг был выбран < 15с назад
+ *    (BungeeCord переброс в игровой мир — не нужно кликать снова)
+ *  - Окно закрылось быстро (< 1.2с) → считаем успешным трансфером, не сбрасываем
+ *  - _lastRankSelectedAt для отслеживания времени последнего выбора
  */
 
 const log = require("electron-log");
@@ -25,7 +26,6 @@ const RANK_NPC_NAMES = [
   "анка", "анк", "role", "роль", "профессия", "profession",
 ];
 
-/** Парсит заголовок окна из JSON-строки mineflayer → plain text */
 function parseWindowTitle(raw) {
   if (!raw) return "";
   try {
@@ -62,15 +62,15 @@ class LobbyHandler {
     this.emit = emit;
     this.inLobby = false;
     this.rankSelected = false;
+    this._lastRankSelectedAt = 0;    // когда последний раз выбирали ранг
     this.lobbyCheckTimer = null;
     this._windowOpenHandler = null;
     this._respawnHandler = null;
     this._titleHandler = null;
-    this._pendingTimers = []; // Все активные таймеры для надёжной очистки
+    this._pendingTimers = [];
     this.config = instance.config.lobbyConfig || {};
   }
 
-  /** Обёртка над setTimeout — автоматически трекает таймер */
   _setTimeout(fn, ms) {
     const timer = setTimeout(() => {
       this._pendingTimers = this._pendingTimers.filter(t => t !== timer);
@@ -80,12 +80,10 @@ class LobbyHandler {
     return timer;
   }
 
-  /** Безопасная задержка — прерывается если бот отключился */
   _delay(ms) {
     return new Promise(resolve => {
       const timer = setTimeout(resolve, ms);
       this._pendingTimers.push(timer);
-      // Таймер уберём из списка когда он сработает
       setTimeout(() => {
         this._pendingTimers = this._pendingTimers.filter(t => t !== timer);
       }, ms + 10);
@@ -102,12 +100,12 @@ class LobbyHandler {
     log.info("[LobbyHandler] Starting for bot", this.instance.id);
 
     this._windowOpenHandler = (window) => this._onWindowOpen(window);
-    this._titleHandler = (text) => this._onTitle(text);
-    this._respawnHandler = () => this._onRespawn();
+    this._titleHandler      = (text)   => this._onTitle(text);
+    this._respawnHandler    = ()       => this._onRespawn();
 
     bot.on("windowOpen", this._windowOpenHandler);
-    bot.on("title", this._titleHandler);
-    bot.on("respawn", this._respawnHandler);
+    bot.on("title",      this._titleHandler);
+    bot.on("respawn",    this._respawnHandler);
 
     this.lobbyCheckTimer = this._setTimeout(() => this._checkAndHandleLobby(), 3000);
   }
@@ -117,28 +115,39 @@ class LobbyHandler {
       clearTimeout(this.lobbyCheckTimer);
       this.lobbyCheckTimer = null;
     }
-    // Очищаем все pending таймеры
     for (const timer of this._pendingTimers) clearTimeout(timer);
     this._pendingTimers = [];
 
     const { bot } = this.instance;
     if (bot) {
       if (this._windowOpenHandler) bot.removeListener("windowOpen", this._windowOpenHandler);
-      if (this._titleHandler) bot.removeListener("title", this._titleHandler);
-      if (this._respawnHandler) bot.removeListener("respawn", this._respawnHandler);
+      if (this._titleHandler)      bot.removeListener("title",      this._titleHandler);
+      if (this._respawnHandler)    bot.removeListener("respawn",    this._respawnHandler);
     }
     this._windowOpenHandler = null;
-    this._titleHandler = null;
-    this._respawnHandler = null;
+    this._titleHandler      = null;
+    this._respawnHandler    = null;
     log.info("[LobbyHandler] Stopped");
   }
 
-  /** Событие respawn — при смене сервера в BungeeCord сбрасываем флаги */
+  /**
+   * Respawn = либо смерть, либо BungeeCord-переброс в другой мир.
+   * Если ранг выбирался < 15с назад — это скорее всего переброс в игровой мир,
+   * не сбрасываем флаги и не пробуем кликать снова.
+   */
   _onRespawn() {
-    log.info("[LobbyHandler] Respawn detected — resetting lobby state");
+    const timeSinceRank = Date.now() - this._lastRankSelectedAt;
+    log.info(`[LobbyHandler] Respawn detected (timeSinceRank=${timeSinceRank}ms)`);
+
     this.inLobby = false;
+
+    if (timeSinceRank < 15000) {
+      log.info("[LobbyHandler] Recent rank selection — skipping re-check (BungeeCord transfer OK)");
+      return;
+    }
+
+    // Обычный respawn (смерть или давно) — сбрасываем и перепроверяем
     this.rankSelected = false;
-    // Перепроверяем через 3с — возможно попали в другое лобби
     this._setTimeout(() => this._checkAndHandleLobby(), 3000);
   }
 
@@ -171,12 +180,14 @@ class LobbyHandler {
     const { bot } = this.instance;
     if (!bot?.entity) return;
     if (this.instance.status !== "online") return;
-
     if (this.config.disableCompassDetection) return;
 
     const LOBBY_ITEMS = ["compass", "clock", "watch", "nether_star"];
     const allItems = [...(bot.inventory?.items() || [])];
-    for (let s = 36; s <= 44; s++) { const i = bot.inventory?.slots[s]; if (i) allItems.push(i); }
+    for (let s = 36; s <= 44; s++) {
+      const i = bot.inventory?.slots[s];
+      if (i) allItems.push(i);
+    }
     const lobbyItem = allItems.find(i => LOBBY_ITEMS.includes(i.name));
 
     if (lobbyItem && !this.rankSelected) {
@@ -200,7 +211,6 @@ class LobbyHandler {
     if (this.instance.status !== "online") return;
 
     const mode = this.config.mode || "auto";
-
     if (mode === "compass" || mode === "auto") {
       const ok = await this._useCompass();
       if (ok) return;
@@ -255,7 +265,6 @@ class LobbyHandler {
       const name = (e.displayName || e.name || e.username || "").toLowerCase();
       return RANK_NPC_NAMES.some(n => name.includes(n));
     });
-
     if (!npc) {
       npc = entities.find(e =>
         e !== bot.entity &&
@@ -263,7 +272,6 @@ class LobbyHandler {
         e.position?.distanceTo(bot.entity.position) < 20
       );
     }
-
     if (!npc) { log.info("[LobbyHandler] No NPC found"); return; }
     log.info("[LobbyHandler] Found NPC:", npc.displayName || npc.name);
     await this._interactWithEntity(npc);
@@ -297,13 +305,12 @@ class LobbyHandler {
   async _onWindowOpen(window) {
     const { bot } = this.instance;
     if (!bot) return;
-
-    // Если бот уже не онлайн (переброска на другой сервер) — игнорируем
     if (this.instance.status !== "online") return;
 
+    const windowOpenedAt = Date.now();
     const rawTitle = window?.title || "";
-    const title = parseWindowTitle(rawTitle);
-    const lower = title.toLowerCase();
+    const title    = parseWindowTitle(rawTitle);
+    const lower    = title.toLowerCase();
 
     log.info("[LobbyHandler] windowOpen:", title, "| slots:", window?.slots?.length);
 
@@ -323,7 +330,7 @@ class LobbyHandler {
     // Ждём загрузки предметов в окне
     await this._delay(800);
 
-    // Проверяем статус после ожидания — бот мог перейти на другой сервер
+    // Проверяем статус после ожидания
     if (this.instance.status !== "online") {
       log.warn("[LobbyHandler] Bot no longer online after window wait — skipping click");
       this.rankSelected = false;
@@ -331,16 +338,25 @@ class LobbyHandler {
     }
 
     if (!bot.currentWindow) {
-      log.warn("[LobbyHandler] Window closed before we could click");
+      // Считаем сколько времени прошло с момента открытия окна
+      const windowAge = Date.now() - windowOpenedAt;
+      if (windowAge < 1300) {
+        // Окно закрылось очень быстро — скорее всего сервер закрыл его
+        // сразу после того как BungeeCord начал трансфер (клик сработал).
+        // Не сбрасываем rankSelected.
+        log.info("[LobbyHandler] Window closed quickly after open (" + windowAge + "ms) — assuming transfer OK");
+        return;
+      }
+      log.warn("[LobbyHandler] Window closed before we could click (" + windowAge + "ms)");
       this.rankSelected = false;
       return;
     }
 
-    const slotIndex = this.config.rankSlot ?? 0;
+    const slotIndex  = this.config.rankSlot ?? 0;
     const targetName = (this.config.rankName || "").toLowerCase();
 
     if (targetName && bot.currentWindow.slots) {
-      const foundSlot = bot.currentWindow.slots.find((s, i) => {
+      const foundSlot = bot.currentWindow.slots.find(s => {
         if (!s) return false;
         const name = (s.customName || s.displayName || s.name || "").toLowerCase();
         return name.includes(targetName);
@@ -370,6 +386,7 @@ class LobbyHandler {
   }
 
   _emitRankSelected(rankName) {
+    this._lastRankSelectedAt = Date.now();  // фиксируем время выбора
     log.info("[LobbyHandler] Rank selected:", rankName);
     this.emit("bot:chat", {
       botId: this.instance.id,

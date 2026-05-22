@@ -25,7 +25,7 @@ const { AgentLoop } = require("./agent-loop");
 const { AIBrain } = require("./ai-brain");
 const { AnarchyProtocol } = require("./anarchy-protocol");
 const { LobbyHandler } = require("./lobby-handler");
-const { initAnticheatBypass, smoothLookAt, randomHitboxPoint } = require("./anticheat-bypass");
+const { initAnticheatBypass, initLoginMasking, doSpawnLookAround, smoothLookAt, randomHitboxPoint } = require("./anticheat-bypass");
 
 const RUSSIAN_OVERRIDE = `ВАЖНО: Ты общаешься НА РУССКОМ ЯЗЫКЕ. Все твои ответы должны быть на русском. `;
 
@@ -158,6 +158,8 @@ class BotManager {
     try {
       const opts = this._buildOptions(instance.config);
       instance.bot = mineflayer.createBot(opts);
+      // Маскируем пакеты СРАЗУ после создания бота, до начала login-последовательности
+      initLoginMasking(instance.bot);
       this._attachEvents(instance);
       return { success: true };
     } catch (err) {
@@ -175,7 +177,8 @@ class BotManager {
       version: config.version || "1.20.1",
       auth: config.authType === "microsoft" ? "microsoft" : "offline",
       hideErrors: false,
-      checkTimeoutInterval: 60000,
+      connectTimeout: 30000,       // таймаут TCP-подключения 30с (раньше не было)
+      checkTimeoutInterval: 30000, // keepalive: 30с вместо 60с
     };
     const proxy = config.proxy || this.configManager.get("globalProxy", "");
     if (proxy) {
@@ -283,6 +286,38 @@ class BotManager {
     if (pvpPlugin)          { try { bot.loadPlugin(pvpPlugin); } catch {} }
     if (armorManagerPlugin) { try { bot.loadPlugin(armorManagerPlugin); } catch {} }
 
+    // ── Transfer-пакет (Minecraft 1.20.5+ / Velocity) ────────────────────────
+    // Сервер присылает этот пакет когда хочет перебросить клиента на другой адрес.
+    // Mineflayer не обрабатывает его нативно — перехватываем вручную.
+    try {
+      bot._client.on("transfer", (packet) => {
+        const targetHost = packet.host || packet.hostname;
+        const targetPort = packet.port || 25565;
+        log.info(`[BotManager] Transfer packet → ${targetHost}:${targetPort}`);
+        this._addChat(instance, "system", `🔀 Сервер перебрасывает на ${targetHost}:${targetPort}`);
+
+        // Сохраняем оригинальный хаб для возможного возврата
+        instance._hubHost    = instance._hubHost    || instance.config.host;
+        instance._hubPort    = instance._hubPort    || instance.config.port;
+        instance._reconnectAttempts = 0;
+
+        // Обновляем конфиг на целевой сервер и переподключаемся
+        instance.config.host = targetHost;
+        instance.config.port = targetPort;
+
+        setTimeout(() => {
+          if (!instance.config.autoReconnect) return;
+          this.connectBot(instance.id).catch(err => {
+            log.error("[BotManager] Transfer reconnect failed:", err.message);
+            // Откатываемся на хаб если перенос не удался
+            instance.config.host = instance._hubHost;
+            instance.config.port = instance._hubPort;
+          });
+        }, 500 + Math.floor(Math.random() * 1000));
+      });
+    } catch {}
+
+
     bot.once("spawn", () => {
       instance.status = "online";
       instance.captchaHandler = new CaptchaHandler(instance, this.ollamaManager);
@@ -348,8 +383,9 @@ class BotManager {
 
       // Инициализируем античит-модуль: патч пакетов, спринта, forcedMove
       initAnticheatBypass(bot, instance);
+      // Случайный осмотр после спавна — имитация живого игрока
+      doSpawnLookAround(bot).catch(() => {});
 
-      
       // ── Самооборона ──────────────────────────────────────────────────
       let prevHealth = bot.health || 20;
       bot.on('health', () => {
@@ -892,10 +928,23 @@ class BotManager {
   _scheduleReconnect(instance) {
     if (!instance.config.autoReconnect) return;
     if (instance.reconnectTimer) clearTimeout(instance.reconnectTimer);
+
+    // Exponential backoff: 5с → 10с → 20с → 40с → 60с (максимум)
+    const attempt  = (instance._reconnectAttempts || 0);
+    const base     = instance.config.reconnectDelay || 5000;
+    const delay    = Math.min(base * Math.pow(2, attempt), 60000);
+    const jitter   = Math.floor(Math.random() * 2000); // ±2с рандом
+    const finalMs  = delay + jitter;
+
+    instance._reconnectAttempts = attempt + 1;
+    log.info(`[BotManager] Reconnect #${attempt + 1} in ${Math.round(finalMs / 1000)}s (bot ${instance.id})`);
+
     instance.reconnectTimer = setTimeout(() => {
-      log.info("Auto-reconnecting", instance.id);
-      this.connectBot(instance.id).catch((e) => log.error("Reconnect failed:", e.message));
-    }, instance.config.reconnectDelay || 5000);
+      instance.reconnectTimer = null;
+      this.connectBot(instance.id)
+        .then(() => { instance._reconnectAttempts = 0; })  // сброс счётчика при успехе
+        .catch((e) => log.error("[BotManager] Reconnect failed:", e.message));
+    }, finalMs);
   }
 
   async disconnectBot(botId) {
