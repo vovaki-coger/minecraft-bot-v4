@@ -112,8 +112,10 @@ function parseAndy4Response(text) {
   let cleaned = stripThinkBlocks(text);
   const commands = [];
 
-  // Паттерн: !commandName(...) или !commandName без скобок
-  const cmdPattern = /!(\w+)(?:\(([^)]*)\))?/g;
+  // Паттерн: !commandName(...) или !commandName без скобок.
+  // \s* перед ( позволяет обрабатывать случаи вида "!goToPlayer ("player", 3)"
+  // где модель ставит пробел между именем команды и скобкой.
+  const cmdPattern = /!(\w+)\s*(?:\(([^)]*)\))?/g;
   for (const m of cleaned.matchAll(cmdPattern)) {
     const name = "!" + m[1];
     const args = parseArgs(m[2] || "");

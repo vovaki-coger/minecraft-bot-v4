@@ -156,6 +156,7 @@ function buildAndy4Context(bot, memory) {
   return `
 CONTEXT:
 Stats:
+- status: ONLINE (spawned, active in game)
 - position: x=${Math.round(pos.x)}, y=${Math.round(pos.y)}, z=${Math.round(pos.z)}
 - gamemode: ${gamemode}
 - health: ${health} / 20
@@ -226,6 +227,7 @@ function buildReActContext(bot, memory) {
   const night = timeOfDay > 13000 && timeOfDay < 23000;
 
   return `
+СТАТУС: ОНЛАЙН (бот заспавнен, в игре)
 Мир: HP=${Math.round(bot.health||20)}/20 Голод=${Math.round(bot.food||20)}/20 Поз=(${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)}) ${night?"НОЧЬ":"День"}
 Инвентарь: ${items || "пусто"}
 Существа рядом: ${entities || "нет"}
@@ -632,8 +634,10 @@ class AIBrain {
       const match = clean.match(/\{[\s\S]*\}/);
       if (match) parsed = JSON.parse(match[0]);
     } catch {
-      // Не JSON — просто говорим это
-      if (clean.length > 2) this.bot.chat(clean.slice(0, 100));
+      // Не JSON — не отправляем в чат Minecraft, только логируем.
+      // Раньше здесь был bot.chat(clean) — это приводило к тому что AI-ответы
+      // (в том числе ошибки и служебный текст) уходили в публичный чат сервера.
+      log.warn("[AIBrain ReAct] Non-JSON response, skipping chat:", clean.slice(0, 80));
       return;
     }
 

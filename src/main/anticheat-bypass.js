@@ -316,24 +316,24 @@ async function doSpawnLookAround(bot) {
 //
 function setupLoadingTerrainHandler(bot) {
   try {
-    let positionConfirmed = false;
     const client = bot._client;
     if (!client) return;
 
-    // Vanilla клиент: после получения position от сервера НЕМЕДЛЕННО отвечает
-    // position_look с теми же координатами (телепорт-подтверждение).
-    // Mineflayer делает это, но с некоторой задержкой.
-    // Дополнительно вешаем прямой обработчик на raw пакет для надёжности.
+    // Vanilla клиент подтверждает КАЖДЫЙ position-пакет через teleport_confirm.
+    // Старый код использовал флаг positionConfirmed = true после первого пакета,
+    // из-за чего все последующие position-пакеты (например, при BungeeCord-трансфере
+    // на игровой под-сервер) оставались неподтверждёнными → сервер кикал бота
+    // за "phantom coordinates" / бот не мог двигаться после телепорта.
+    // Исправление: подтверждаем каждый уникальный teleportId ровно один раз.
+    const confirmedIds = new Set();
     client.on("position", (packet) => {
-      if (positionConfirmed) return;
-      positionConfirmed = true;
-      // Telegram confirmation через teleport_confirm
-      if (packet.teleportId !== undefined) {
-        try {
-          client.write("teleport_confirm", { teleportId: packet.teleportId });
-        } catch {}
-      }
-      log.debug("[LoadingTerrain] position received, confirmed teleportId=" + packet.teleportId);
+      if (packet.teleportId === undefined) return;
+      if (confirmedIds.has(packet.teleportId)) return;
+      confirmedIds.add(packet.teleportId);
+      try {
+        client.write("teleport_confirm", { teleportId: packet.teleportId });
+      } catch {}
+      log.debug("[LoadingTerrain] teleport_confirm sent, teleportId=" + packet.teleportId);
     });
 
     log.info("[AnticheatBypass] Loading terrain handler установлен");

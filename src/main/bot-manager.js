@@ -1137,7 +1137,14 @@ class BotManager {
     instance.config.aiEnabled = enabled;
     this.configManager.saveBotConfig(instance.config);
     if (enabled && instance.bot && instance.status === "online" && !instance.aiBrain) {
-      instance.aiBrain = new AIBrain(instance, this.ollamaManager, instance.taskManager, this.emit);
+      instance.aiBrain = new AIBrain(
+        instance.bot,
+        instance.config,
+        this.ollamaManager,
+        this.emit,
+        instance.id
+      );
+      instance.aiBrain.taskManager = instance.taskManager;
       instance.aiBrain.startAutonomous(10000);
     } else if (!enabled && instance.aiBrain) {
       instance.aiBrain.stopAutonomous();
