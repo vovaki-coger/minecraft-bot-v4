@@ -3,6 +3,7 @@ import { useAppStore } from "./store/appStore";
 import MainLayout from "./components/MainLayout";
 import OllamaSetup from "./components/OllamaSetup";
 import LoadingScreen from "./components/LoadingScreen";
+import UpdateBanner from "./components/UpdateBanner";
 
 class ErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -97,6 +98,7 @@ export default function App() {
   if (needsSetup && !ollamaStatus?.running) return <OllamaSetup onComplete={() => setNeedsSetup(false)} />;
   return (
     <ErrorBoundary>
+      <UpdateBanner />
       <MainLayout />
     </ErrorBoundary>
   );

@@ -37,11 +37,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Windows artifact
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist-electron/*.exe
+          path: dist-electron/
 
   build-linux:
     name: Build Linux
@@ -77,11 +77,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Linux artifact
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: dist-electron/*.AppImage
+          path: dist-electron/
 
   release:
     name: Create GitHub Release
@@ -116,10 +116,14 @@ jobs:
 
             ### Установка
             - **Windows**: скачай `.exe` и запусти установщик
-            - **Linux**: скачай `.AppImage`, дай права на выполнение (`chmod +x`) и запусти
+            - **Linux**: скачай `.AppImage`, дай права (`chmod +x`) и запусти
+
+            ### Автообновление
+            Приложение автоматически проверяет наличие новых версий при каждом запуске.
+            Когда появится обновление — вверху экрана появится зелёный баннер с кнопкой скачать.
 
             ### Изменения
-            Смотри [CHANGELOG](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }})
+            Смотри [коммиты](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }})
           draft: false
           prerelease: false
           files: ./release-files/*

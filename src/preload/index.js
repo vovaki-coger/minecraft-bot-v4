@@ -66,6 +66,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   shell: {
     openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   },
+  update: {
+    check:   () => ipcRenderer.invoke("update:check"),
+    download:() => ipcRenderer.invoke("update:download"),
+    install: () => ipcRenderer.invoke("update:install"),
+  },
   on: (channel, cb) => {
     const allowedChannels = [
       "bot:created", "bot:deleted", "bot:statusChanged", "bot:statsUpdated",
@@ -77,6 +82,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "bot:taskStarted", "bot:taskStopped", "bot:taskLog",
       "ollama:pullProgress",
       "coordinator:statusUpdate", "coordinator:taskAssigned", "coordinator:groupChat",
+      "update:available", "update:downloadProgress", "update:downloaded", "update:error",
     ];
     if (!allowedChannels.includes(channel)) return () => {};
     const handler = (_e, data) => cb(data);

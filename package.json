@@ -1,6 +1,6 @@
 {
   "name": "@workspace/minecraft-bot-4",
-  "version": "4.5.0",
+  "version": "4.6.0",
   "description": "Призмарин бот v4 - фикс античита, phantom-coords, humanizer движения",
   "main": "src/main/index.js",
   "private": true,
@@ -13,9 +13,9 @@
     "build:electron": "electron-builder",
     "typecheck": "tsc --noEmit",
     "pack": "electron-builder --dir",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux",
-    "dist:mac": "electron-builder --mac"
+    "dist:win": "electron-builder --win --publish=never",
+    "dist:linux": "electron-builder --linux --publish=never",
+    "dist:mac": "electron-builder --mac --publish=never"
   },
   "dependencies": {
     "vec3": "^0.1.10",
@@ -133,6 +133,12 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     },
-    "artifactName": "PrizmarinBot-${version}-${arch}.${ext}"
+    "artifactName": "PrizmarinBot-${version}-${arch}.${ext}",
+    "publish": {
+      "provider": "github",
+      "owner": "vovaki-coger",
+      "repo": "minecraft-bot-v4",
+      "releaseType": "release"
+    }
   }
 }

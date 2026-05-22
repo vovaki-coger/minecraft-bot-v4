@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const path = require("path");
+const { autoUpdater } = require("electron-updater");
 const { OllamaManager } = require("./ollama-manager");
 const { BotManager } = require("./bot-manager");
 const { CoordinatorServer } = require("./coordinator");
@@ -11,6 +12,42 @@ log.initialize({ preload: true });
 log.transports.file.level = "debug";
 
 const isDev = process.env.NODE_ENV === "development";
+
+// ── Автообновление ────────────────────────────────────────────────────────────
+autoUpdater.logger = log;
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+
+function setupAutoUpdater() {
+  if (isDev) return;
+
+  autoUpdater.on("update-available", (info) => {
+    log.info("[AutoUpdater] Update available:", info.version);
+    if (mainWindow) mainWindow.webContents.send("update:available", info);
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    log.info("[AutoUpdater] No updates available");
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    if (mainWindow) mainWindow.webContents.send("update:downloadProgress", progress);
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    log.info("[AutoUpdater] Update downloaded:", info.version);
+    if (mainWindow) mainWindow.webContents.send("update:downloaded", info);
+  });
+
+  autoUpdater.on("error", (err) => {
+    log.error("[AutoUpdater] Error:", err.message);
+    if (mainWindow) mainWindow.webContents.send("update:error", err.message);
+  });
+
+  // Проверяем обновления через 8 секунд после запуска и каждый час
+  setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 8000);
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 60 * 60 * 1000);
+}
 
 let mainWindow = null;
 let ollamaManager = null;
@@ -27,7 +64,7 @@ function createWindow() {
     minHeight: 700,
     backgroundColor: "#05070f",
     titleBarStyle: "default",
-    title: "Призмарин Бот v4.5.0",
+    title: "Призмарин Бот v4.6.0",
     icon: path.join(__dirname, "../../assets/icon.png"),
     webPreferences: {
       nodeIntegration: false,
@@ -184,11 +221,17 @@ function setupIpcHandlers() {
     return result;
   });
   ipcMain.handle("shell:openExternal", (_e, url) => shell.openExternal(url));
+
+  // ── Автообновление ─────────────────────────────────────────────────────────
+  ipcMain.handle("update:check",    () => autoUpdater.checkForUpdates().catch((e) => ({ error: e.message })));
+  ipcMain.handle("update:download", () => autoUpdater.downloadUpdate().catch((e) => ({ error: e.message })));
+  ipcMain.handle("update:install",  () => { autoUpdater.quitAndInstall(false, true); });
 }
 
 app.whenReady().then(async () => {
   await initialize();
   createWindow();
+  setupAutoUpdater();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
