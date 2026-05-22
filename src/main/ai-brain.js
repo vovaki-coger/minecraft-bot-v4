@@ -601,8 +601,16 @@ class AIBrain {
     const clean = stripThinkBlocks(text);
     const { chatText, commands } = parseAndy4Response(clean);
 
-    // Сначала говорим
-    if (chatText && chatText.length > 2) {
+    // Фильтруем chatText — не отправляем в MC чат системные сообщения и списки блоков.
+    // В MC чат должны уходить только короткие человекочитаемые фразы.
+    const isChatSafe = chatText && chatText.length > 2 && chatText.length <= 120
+      && !/^SYSTEM:/i.test(chatText)
+      && !/^Action output/i.test(chatText)
+      && !/^Результат/i.test(chatText)
+      // Если текст — длинный список через запятую (инвентарь, блоки и т.п.) — в лог, не в чат
+      && !((chatText.match(/,/g) || []).length >= 4 && /[a-z_]+,[a-z_ ,]+/.test(chatText));
+
+    if (isChatSafe) {
       this.bot.chat(chatText.slice(0, 100));
       this.emit("bot:message", {
         botId: this.botId,
@@ -610,6 +618,8 @@ class AIBrain {
         sender: this.bot.username,
         isBot: true
       });
+    } else if (chatText) {
+      log.info("[AIBrain Andy4] Suppressed chat (system/list):", chatText.slice(0, 120));
     }
 
     // Потом выполняем команды

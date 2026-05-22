@@ -796,32 +796,48 @@ async function executeAndy4Command(cmd, instance, taskManager) {
       case "!mine": {
         const blockType = args[0];
         const count = typeof args[1] === "number" ? Math.min(args[1], 64) : 1;
-        if (!blockType || !taskManager) return false;
+        if (!blockType) return false;
 
-        if (/log|wood/.test(blockType)) {
+        if (taskManager && /log|wood/.test(blockType)) {
           taskManager.runTask("gather_wood", { count }).catch(() => {});
-        } else if (/stone|cobble/.test(blockType)) {
+        } else if (taskManager && /stone|cobble/.test(blockType)) {
           taskManager.runTask("gather_stone", { count }).catch(() => {});
-        } else if (/iron_ore|raw_iron/.test(blockType)) {
+        } else if (taskManager && /iron_ore|raw_iron/.test(blockType)) {
           taskManager.runTask("gather_stone", { count, target: blockType }).catch(() => {});
         } else {
-          // Универсальная добыча
+          // Универсальная добыча с автоматической экипировкой инструмента
           (async () => {
             let mined = 0;
-            while (mined < count) {
-              const block = bot.findBlock({ matching: b => b.name === blockType, maxDistance: 64 });
-              if (!block) break;
-              await bot.pathfinder.goto(new goals.GoalNear(
-                block.position.x, block.position.y, block.position.z, 2
-              ));
-              if (bot.entity.position.distanceTo(block.position) < 4) {
-                try {
-                  await bot.dig(block);
-                  mined++;
-                } catch { break; }
+            let misses = 0;
+            while (mined < count && misses < 5) {
+              const block = bot.findBlock({ matching: b => b.name.includes(blockType) || b.name === blockType, maxDistance: 64 });
+              if (!block) { log.info(`[Andy4 mine] block not found: ${blockType}`); break; }
+              try {
+                await bot.pathfinder.goto(new goals.GoalNear(
+                  block.position.x, block.position.y, block.position.z, 2
+                ));
+              } catch (e) {
+                log.warn(`[Andy4 mine] pathfinder error: ${e.message}`);
+                misses++;
+                continue;
+              }
+              const dist = bot.entity.position.distanceTo(block.position);
+              if (dist > 5) { misses++; continue; }
+              try {
+                // Экипируем лучший инструмент для этого блока
+                const tool = bot.pathfinder?.bestHarvestTool?.(block) ||
+                  bot.inventory.items().find(i => /pickaxe|axe|shovel/.test(i.name));
+                if (tool) await bot.equip(tool, "hand").catch(() => {});
+                await bot.dig(block, true);
+                mined++;
+                misses = 0;
+              } catch (e) {
+                log.warn(`[Andy4 mine] dig error: ${e.message}`);
+                misses++;
               }
             }
-          })().catch(() => {});
+            log.info(`[Andy4 mine] done: ${mined}/${count} ${blockType}`);
+          })().catch(e => log.error("[Andy4 mine] fatal:", e.message));
         }
         return true;
       }
@@ -844,15 +860,48 @@ async function executeAndy4Command(cmd, instance, taskManager) {
 
       case "!digdown": {
         const distance = typeof args[0] === "number" ? args[0] : 5;
-        const pos = bot.entity.position;
+        const pos = bot.entity.position.clone();
+        // Экипируем лучшую кирку
+        const pick = bot.inventory.items().find(i => /pickaxe/.test(i.name));
+        if (pick) await bot.equip(pick, "hand").catch(() => {});
         for (let i = 0; i < distance; i++) {
           const block = bot.blockAt(pos.offset(0, -(i + 1), 0));
-          if (!block || block.name === "air") break;
-          if (block.name === "lava" || block.name === "water") break;
-          try { await bot.dig(block); } catch { break; }
+          if (!block || block.name === "air" || block.name === "cave_air") break;
+          if (block.name === "lava" || block.name === "water" || block.name === "flowing_lava") break;
+          try { await bot.dig(block, true); } catch (e) { log.warn("[Andy4 digDown]", e.message); break; }
           await sleep(300);
         }
         return true;
+      }
+
+      case "!tillsoil":
+      case "!hoesoil":
+      case "!farmland":
+      case "!till": {
+        // Вспахиваем землю под ногами или рядом
+        const range = typeof args[0] === "number" ? args[0] : 3;
+        const hoe = bot.inventory.items().find(i => /hoe/.test(i.name));
+        if (!hoe) { log.warn("[Andy4 till] no hoe in inventory"); return false; }
+        await bot.equip(hoe, "hand");
+        const tillable = ["grass_block", "dirt", "dirt_path", "rooted_dirt"];
+        let tilled = 0;
+        const pos = bot.entity.position;
+        for (let dx = -range; dx <= range; dx++) {
+          for (let dz = -range; dz <= range; dz++) {
+            const block = bot.blockAt(pos.offset(dx, -1, dz));
+            if (!block || !tillable.includes(block.name)) continue;
+            const above = bot.blockAt(block.position.offset(0, 1, 0));
+            if (!above || above.name !== "air") continue;
+            try {
+              await bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 2));
+              await bot.activateBlock(block);
+              tilled++;
+              await sleep(100);
+            } catch (e) { log.warn("[Andy4 till] error:", e.message); }
+          }
+        }
+        log.info(`[Andy4 till] tilled ${tilled} blocks`);
+        return tilled > 0;
       }
 
       // ─── БОЙ ──────────────────────────────────────────────
@@ -1035,31 +1084,31 @@ async function executeAndy4Command(cmd, instance, taskManager) {
 
       case "!stats": {
         const info = cmdStats(bot);
-        bot.chat(info.slice(0, 200));
+        log.info("[Andy4 stats]", info);
         return true;
       }
 
       case "!inventory": {
         const info = cmdInventory(bot);
-        bot.chat(info.slice(0, 200));
+        log.info("[Andy4 inventory]", info);
         return true;
       }
 
       case "!nearbyblocks": {
         const info = cmdNearbyBlocks(bot);
-        bot.chat(info.slice(0, 200));
+        log.info("[Andy4 nearbyBlocks]", info);
         return true;
       }
 
       case "!craftable": {
         const info = cmdCraftable(bot);
-        bot.chat(info.slice(0, 200));
+        log.info("[Andy4 craftable]", info);
         return true;
       }
 
       case "!entities": {
         const info = cmdEntities(bot);
-        bot.chat(info.slice(0, 200));
+        log.info("[Andy4 entities]", info);
         return true;
       }
 

@@ -1199,6 +1199,21 @@ class BotManager {
     return { success: true };
   }
 
+  async closeCurrentWindow(botId) {
+    const instance = this.bots.get(botId);
+    if (!instance?.bot) return { success: false };
+    const win = instance.bot.currentWindow;
+    if (!win) return { success: false, reason: "no open window" };
+    try {
+      await instance.bot.closeWindow(win);
+      log.info(`[BotManager] closeCurrentWindow botId=${botId}`);
+      return { success: true };
+    } catch (err) {
+      log.warn(`[BotManager] closeCurrentWindow error: ${err.message}`);
+      return { success: false, reason: err.message };
+    }
+  }
+
   async startAnarchyProtocol(botId, opts) {
     const instance = this.bots.get(botId);
     if (!instance?.bot) throw new Error("Бот не подключён");

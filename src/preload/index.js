@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getAnarchyState: (id) => ipcRenderer.invoke("bot:getAnarchyState", id),
     runTask: (id, task, args) => ipcRenderer.invoke("bot:runTask", id, task, args),
     stopTask: (id) => ipcRenderer.invoke("bot:stopTask", id),
+    closeWindow: (id) => ipcRenderer.invoke("bot:closeWindow", id),
   },
   anka: {
     list: () => ipcRenderer.invoke("anka:list"),

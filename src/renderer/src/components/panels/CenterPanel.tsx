@@ -338,10 +338,24 @@ export default function CenterPanel({ bot }: { bot: BotState | null }) {
         {/* Chest/window slots — выше инвентаря */}
         {currentWindow && (
           <div style={{ background: "rgba(0,0,0,.3)", border: "1px solid #2a4060", borderRadius: 5, overflow: "hidden" }}>
-            <div style={{ padding: "5px 10px", borderBottom: "1px solid #1a2040", background: "rgba(0,200,255,.03)" }}>
+            <div style={{ padding: "5px 10px", borderBottom: "1px solid #1a2040", background: "rgba(0,200,255,.03)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ color: "#00c8ff", fontSize: 11, fontFamily: "monospace" }}>
                 📦 {winTitle || "Сундук / Меню"}
               </span>
+              <button
+                title="Закрыть сундук"
+                onClick={async () => {
+                  try { await window.electronAPI.bot.closeWindow(bot!.id); } catch {}
+                  setCurrentWindow(null);
+                }}
+                style={{
+                  background: "none", border: "1px solid rgba(255,80,80,.3)", borderRadius: 3,
+                  color: "#ff5555", fontSize: 11, padding: "1px 7px", cursor: "pointer",
+                  lineHeight: 1.4, transition: "all .15s",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,80,80,.1)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+              >✕ Закрыть</button>
             </div>
             <div style={{ padding: "8px 10px" }}>
               {chestGrid.length > 0 ? (

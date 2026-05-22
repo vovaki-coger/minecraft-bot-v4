@@ -64,7 +64,7 @@ function createWindow() {
     minHeight: 700,
     backgroundColor: "#05070f",
     titleBarStyle: "default",
-    title: "Призмарин Бот v4.6.0",
+    title: "Призмарин Бот v4.7.0",
     icon: path.join(__dirname, "../../assets/icon.png"),
     webPreferences: {
       nodeIntegration: false,
@@ -163,6 +163,10 @@ function setupIpcHandlers() {
   );
   ipcMain.handle("bot:stopTask", (_e, botId) =>
     botManager.stopBotTask(botId)
+  );
+
+  ipcMain.handle("bot:closeWindow", (_e, botId) =>
+    botManager.closeCurrentWindow(botId)
   );
 
   ipcMain.handle("bot:triggerLobby", (_e, botId) => botManager.triggerLobbyRank(botId));
