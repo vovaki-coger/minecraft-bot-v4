@@ -25,7 +25,7 @@ const { AgentLoop } = require("./agent-loop");
 const { AIBrain } = require("./ai-brain");
 const { AnarchyProtocol } = require("./anarchy-protocol");
 const { LobbyHandler } = require("./lobby-handler");
-const { initAnticheatBypass, initLoginMasking, doSpawnLookAround, smoothLookAt, randomHitboxPoint } = require("./anticheat-bypass");
+const { initAnticheatBypass, initLoginMasking, doSpawnLookAround, setupLoadingTerrainHandler, smoothLookAt, randomHitboxPoint } = require("./anticheat-bypass");
 
 const RUSSIAN_OVERRIDE = `ВАЖНО: Ты общаешься НА РУССКОМ ЯЗЫКЕ. Все твои ответы должны быть на русском. `;
 
@@ -160,6 +160,8 @@ class BotManager {
       instance.bot = mineflayer.createBot(opts);
       // Маскируем пакеты СРАЗУ после создания бота, до начала login-последовательности
       initLoginMasking(instance.bot);
+      // Подтверждаем position-пакеты во время загрузки мира (до spawn)
+      setupLoadingTerrainHandler(instance.bot);
       this._attachEvents(instance);
       return { success: true };
     } catch (err) {

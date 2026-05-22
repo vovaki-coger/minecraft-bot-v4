@@ -1,13 +1,21 @@
 /**
  * AnticheatBypass — обход античита для Mineflayer-ботов.
  *
- * Фиксит:
- *  - "Фантомные координаты": копание блока после rubber-band откатa позиции
- *  - Идеальные тайминги движения, поворота, кликов
- *  - Мгновенное ускорение/торможение без инерции
- *  - Детектируемый brand "mineflayer" → маскируем в "vanilla"
- *  - Мгновенный settings-пакет → задерживаем 450–1250мс + рандомизируем
- *  - Стационарный начальный взгляд → добавляем случайный осмотр после спавна
+ * Поддерживаемые античиты:
+ *  - GrimAC (открытый, строгая детерминированная физика)
+ *  - Vulcan (премиум, строгая таймер-проверка)
+ *  - Intave (премиум, продвинутая эвристика)
+ *  - Matrix (платный, анализ движений)
+ *  - Spartan (платный, анализ пакетов)
+ *
+ * Целевые серверы: ReallyWorld, Spookytime, Funtime
+ *
+ * ВАЖНО о GrimAC/Vulcan:
+ *  - Эти античиты используют детерминированную физику — они сами симулируют
+ *    где должен быть игрок каждый тик и сравнивают с отправленными координатами.
+ *  - НЕЛЬЗЯ добавлять X/Z-джиттер к position-пакетам — это сразу VL Speed/Position.
+ *  - НЕЛЬЗЯ добавлять таймерный джиттер — GrimAC/Vulcan считают пакеты в секунду.
+ *  - Можно добавлять микро-джиттер к yaw/pitch (взгляд) — не предсказывается.
  */
 
 const log = require("electron-log");
@@ -76,6 +84,7 @@ async function smoothLookAt(bot, targetPos, force) {
   const startPitch = bot.entity.pitch;
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
+    // Микро-джиттер взгляда (≤ 0.009 рад ≈ 0.5°) — GrimAC не предсказывает взгляд
     let yaw   = startYaw   + (targetYaw   - startYaw)   * t + randFloat(-0.009, 0.009);
     let pitch = startPitch + (targetPitch - startPitch) * t + randFloat(-0.009, 0.009);
     pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
@@ -92,41 +101,53 @@ function randomHitboxPoint(entity) {
   return entity.position.offset(randFloat(-0.1, 0.1), h, randFloat(-0.1, 0.1));
 }
 
-// ── Патч пакетов движения (джиттер позиции и таймингов) ──────────────────────
-
+// ── Патч пакетов движения (только look-джиттер, без position-джиттера) ────────
+//
+// ВАЖНО: для GrimAC и Vulcan НЕ добавляем:
+//   • X/Z координатный джиттер — ломает детерминированную физику GrimAC
+//   • Таймерный джиттер (setTimeout) — GrimAC/Vulcan считают пакетов/сек
+//
+// Добавляем только:
+//   • Микро-джиттер yaw/pitch в look-пакетах (≤ 0.003 рад, не предсказывается)
+//
 function patchMovementPackets(bot) {
   try {
     const client = bot._client;
     if (!client) return;
     const origWrite = client.write.bind(client);
+
     client.write = function(name, data) {
-      if (name === "position" || name === "position_look" || name === "look") {
-        if (data.x !== undefined) {
-          data.x = Math.round(data.x * 1000) / 1000 + randFloat(-0.001, 0.001);
-          data.y = Math.round(data.y * 1000) / 1000;
-          data.z = Math.round(data.z * 1000) / 1000 + randFloat(-0.001, 0.001);
-        }
-        const jitter = randInt(0, 4);
-        if (jitter > 0) {
-          setTimeout(() => origWrite(name, data), jitter);
-          return;
+      // Только look-пакеты получают микро-джиттер взгляда
+      // position/position_look НЕ трогаем — GrimAC предсказывает позицию точно
+      if (name === "look") {
+        if (data.yaw !== undefined) {
+          data = {
+            ...data,
+            yaw:   data.yaw   + randFloat(-0.003, 0.003),
+            pitch: data.pitch + randFloat(-0.002, 0.002),
+          };
         }
       }
       origWrite(name, data);
     };
-    log.info("[AnticheatBypass] Патч пакетов движения применён");
+
+    log.info("[AnticheatBypass] Патч пакетов движения применён (GrimAC-safe mode)");
   } catch (err) {
     log.warn("[AnticheatBypass] patchMovementPackets error:", err.message);
   }
 }
 
-// ── Патч спринта — задержка 1–2 тика перед включением ───────────────────────
-
+// ── Патч спринта — задержка 1–2 тика ────────────────────────────────────────
+//
+// Vanilla: игрок нажимает Ctrl, спринт включается через 1-2 тика.
+// Vulcan/GrimAC проверяют что спринт не включается мгновенно при изменении velocity.
+//
 function patchSprintDelay(bot) {
   try {
     const origSetControl = bot.setControlState.bind(bot);
     bot.setControlState = function(control, state) {
       if (control === "sprint" && state === true) {
+        // 1–2 тика (50–100мс) — имитация нажатия Ctrl у человека
         setTimeout(() => origSetControl(control, state), randInt(50, 100));
         return;
       }
@@ -138,8 +159,11 @@ function patchSprintDelay(bot) {
   }
 }
 
-// ── Обработчик rubber-band ────────────────────────────────────────────────────
-
+// ── Обработчик rubber-band (откат позиции от сервера) ─────────────────────────
+//
+// GrimAC/Vulcan: после forcedMove нужно немедленно остановить движение
+// и подтвердить новую позицию прежде чем двигаться дальше.
+//
 function setupForcedMoveHandler(bot, instance) {
   let _forcedMoveTimer = null;
   bot.on("forcedMove", () => {
@@ -147,29 +171,34 @@ function setupForcedMoveHandler(bot, instance) {
     try { bot.clearControlStates(); } catch {}
     try { bot.setControlState("jump",   false); } catch {}
     try { bot.setControlState("sprint", false); } catch {}
+
     instance._antiCheatCooldownUntil = Date.now() + 1200;
+
     if (_forcedMoveTimer) clearTimeout(_forcedMoveTimer);
     _forcedMoveTimer = setTimeout(() => {
       if (instance._antiCheatCooldownUntil > 0 && Date.now() < instance._antiCheatCooldownUntil) {
         instance._antiCheatCooldownUntil = 0;
       }
     }, 1300);
+
     log.debug("[AnticheatBypass] forcedMove: кулдаун 1.2с");
   });
 }
 
-// ── Маскировка пакетов при входе ─────────────────────────────────────────────
+// ── Маскировка пакетов при входе на сервер ───────────────────────────────────
 //
 // Вызывается СРАЗУ после mineflayer.createBot(), ДО _attachEvents.
-// Перехватывает client.write и:
-//   • brand "mineflayer" → "vanilla"
-//   • settings-пакет задерживается на 450–1250 мс, locale/viewDistance рандомизируются
+//
+// Что делает:
+//   1. brand "mineflayer" → "vanilla"
+//   2. settings-пакет задерживается на 120–450 мс (снижено с 1250мс — серверы
+//      требуют settings быстро иначе кикают при загрузке мира)
+//   3. locale и viewDistance рандомизируются
 //
 function initLoginMasking(bot) {
   try {
     const client = bot._client;
     if (!client) {
-      // _client устанавливается синхронно — если его нет, ждём один тик
       setTimeout(() => initLoginMasking(bot), 10);
       return;
     }
@@ -187,29 +216,31 @@ function initLoginMasking(bot) {
         brandMasked = true;
         const brand = "vanilla";
         const buf = Buffer.allocUnsafe(1 + brand.length);
-        buf[0] = brand.length;           // varint (1 байт для коротких строк)
+        buf[0] = brand.length;       // varint: 1 байт для коротких строк
         buf.write(brand, 1, "utf8");
         log.info("[LoginMask] brand: mineflayer → vanilla");
         return origWrite(name, { ...data, data: buf });
       }
 
-      // ── 2. Settings: задержка + рандом ────────────────────────────────────
+      // ── 2. Settings: задержка 120–450мс + рандомизация ────────────────────
+      // Снижено с 1250мс! Некоторые серверы кикают если settings не получен
+      // в течение первых 500мс — это вызывало "загрузка начинается и прекращается".
       if (!settingsMasked && name === "settings") {
         settingsMasked = true;
-        const delay   = randInt(450, 1250);
+        const delay   = randInt(120, 450);
         const locales = ["en_US", "ru_RU", "uk_UA", "en_GB", "de_DE"];
         const patched = {
           ...data,
           locale:       locales[randInt(0, locales.length - 1)],
-          viewDistance: randInt(7, 12),
+          viewDistance: randInt(8, 12),
           chatMode:     0,
           chatColors:   true,
-          skinParts:    randInt(121, 127),   // не идеальный 127
+          skinParts:    randInt(121, 127),
           mainHand:     1,
         };
         log.info(`[LoginMask] settings delayed ${delay}ms | locale=${patched.locale} view=${patched.viewDistance}`);
         setTimeout(() => { try { origWrite(name, patched); } catch {} }, delay);
-        return;  // не отправляем немедленно
+        return;
       }
 
       origWrite(name, data);
@@ -224,7 +255,7 @@ function initLoginMasking(bot) {
 // ── Случайный осмотр после спавна ────────────────────────────────────────────
 //
 // 2–4 случайных поворота головы в первые 2–4 секунды.
-// Вызывается из spawn-обработчика в bot-manager.
+// Имитирует живого игрока который оглядывается при заходе на сервер.
 //
 async function doSpawnLookAround(bot) {
   try {
@@ -232,9 +263,50 @@ async function doSpawnLookAround(bot) {
     for (let i = 0; i < turns; i++) {
       await sleep(randInt(350, 950));
       if (!bot.entity) return;
-      await bot.look(randFloat(-Math.PI, Math.PI), randFloat(-0.4, 0.3), false).catch(() => {});
+      await bot.look(
+        randFloat(-Math.PI, Math.PI),
+        randFloat(-0.4, 0.3),
+        false
+      ).catch(() => {});
     }
   } catch {}
+}
+
+// ── Keepalive-пакеты во время загрузки мира ──────────────────────────────────
+//
+// Vanilla-клиент отвечает на keep_alive и подтверждает teleport_confirm
+// даже во время экрана "Загрузка мира".
+// Mineflayer делает это автоматически, но на некоторых серверах нужно
+// также подтвердить свою позицию быстро после получения первого position.
+//
+// Этот обработчик вешается на bot._client ДО spawn-эвента.
+//
+function setupLoadingTerrainHandler(bot) {
+  try {
+    let positionConfirmed = false;
+    const client = bot._client;
+    if (!client) return;
+
+    // Vanilla клиент: после получения position от сервера НЕМЕДЛЕННО отвечает
+    // position_look с теми же координатами (телепорт-подтверждение).
+    // Mineflayer делает это, но с некоторой задержкой.
+    // Дополнительно вешаем прямой обработчик на raw пакет для надёжности.
+    client.on("position", (packet) => {
+      if (positionConfirmed) return;
+      positionConfirmed = true;
+      // Telegram confirmation через teleport_confirm
+      if (packet.teleportId !== undefined) {
+        try {
+          client.write("teleport_confirm", { teleportId: packet.teleportId });
+        } catch {}
+      }
+      log.debug("[LoadingTerrain] position received, confirmed teleportId=" + packet.teleportId);
+    });
+
+    log.info("[AnticheatBypass] Loading terrain handler установлен");
+  } catch (err) {
+    log.warn("[AnticheatBypass] setupLoadingTerrainHandler error:", err.message);
+  }
 }
 
 // ── safeGoto ──────────────────────────────────────────────────────────────────
@@ -259,10 +331,8 @@ async function safeGoto(bot, instance, goal, timeoutMs) {
   }
 }
 
-// ── Инициализация движения/спринта/forcedMove ─────────────────────────────────
-//
-// Вызывается в spawn-обработчике (после initLoginMasking).
-//
+// ── Инициализация в spawn-обработчике ────────────────────────────────────────
+
 function initAnticheatBypass(bot, instance) {
   patchMovementPackets(bot);
   patchSprintDelay(bot);
@@ -274,6 +344,7 @@ module.exports = {
   initAnticheatBypass,
   initLoginMasking,
   doSpawnLookAround,
+  setupLoadingTerrainHandler,
   safeDig,
   safeGoto,
   smoothLookAt,
