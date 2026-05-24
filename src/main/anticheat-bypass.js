@@ -377,26 +377,17 @@ function initLoginMasking(bot) {
   }
 }
 
-// ── Подтверждение position-пакетов при загрузке мира ─────────────────────────
+// ── setupLoadingTerrainHandler: ОТКЛЮЧЁН (v2.2) ──────────────────────────────
+//
+// ПРИЧИНА: mineflayer уже обрабатывает teleport_confirm внутри своего
+// physics-движка. Если мы тоже шлём teleport_confirm, сервер получает
+// ДУБЛИРУЮЩИЙ пакет для того же teleportId → InvalidMove / HALTED.
+//
+// Функция оставлена как заглушка для обратной совместимости с bot-manager.js.
 
 function setupLoadingTerrainHandler(bot) {
-  try {
-    const client = bot._client;
-    if (!client) return;
-
-    const confirmedIds = new Set();
-    client.on("position", (packet) => {
-      if (packet.teleportId === undefined) return;
-      if (confirmedIds.has(packet.teleportId)) return;
-      confirmedIds.add(packet.teleportId);
-      try { client.write("teleport_confirm", { teleportId: packet.teleportId }); } catch {}
-      log.debug("[LoadingTerrain] teleport_confirm teleportId=" + packet.teleportId);
-    });
-
-    log.info("[AnticheatBypass] Loading terrain handler установлен");
-  } catch (err) {
-    log.warn("[AnticheatBypass] setupLoadingTerrainHandler error:", err.message);
-  }
+  // Ничего не делаем — mineflayer handles teleport_confirm internally
+  log.info('[AnticheatBypass] Loading terrain handler: no-op (mineflayer handles internally)');
 }
 
 // ── Случайный осмотр после спавна ────────────────────────────────────────────

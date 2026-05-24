@@ -41,7 +41,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist-electron/
+          path: |
+            dist-electron/*.exe
+            dist-electron/*.zip
 
   build-linux:
     name: Build Linux
@@ -81,7 +83,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: dist-electron/
+          path: |
+            dist-electron/*.AppImage
+            dist-electron/*.deb
+            dist-electron/*.rpm
 
   release:
     name: Create GitHub Release
@@ -115,12 +120,9 @@ jobs:
             ## Призмарин Бот ${{ github.ref_name }}
 
             ### Установка
-            - **Windows**: скачай `.exe` и запусти установщик
+            - **Windows (установщик)**: скачай `PrizmarinBot-Setup-*.exe` и запусти
+            - **Windows (portable)**: скачай `PrizmarinBot-*-portable.exe` — запускается без установки, один файл
             - **Linux**: скачай `.AppImage`, дай права (`chmod +x`) и запусти
-
-            ### Автообновление
-            Приложение автоматически проверяет наличие новых версий при каждом запуске.
-            Когда появится обновление — вверху экрана появится зелёный баннер с кнопкой скачать.
 
             ### Изменения
             Смотри [коммиты](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }})

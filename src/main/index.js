@@ -66,7 +66,7 @@ function createWindow() {
     minHeight: 700,
     backgroundColor: "#05070f",
     titleBarStyle: "default",
-    title: "Призмарин Бот v4.9.0",
+    title: "Призмарин Бот v4.9.1",
     icon: path.join(__dirname, "../../assets/icon.png"),
     webPreferences: {
       nodeIntegration: false,
@@ -82,6 +82,15 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
+
+  // before-input-event — перехватываем F12 ВНУТРИ окна (работает даже когда DevTools активны)
+  mainWindow.webContents.on('before-input-event', (_e, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12' &&
+        !input.control && !input.alt && !input.shift) {
+      _e.preventDefault();
+      toggleOverlay();
+    }
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;

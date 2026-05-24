@@ -1,7 +1,7 @@
 {
   "name": "@workspace/minecraft-bot-4",
-  "version": "4.9.0",
-  "description": "Призмарин бот v4 - фикс античита, phantom-coords, humanizer движения",
+  "version": "4.9.1",
+  "description": "Призмарин бот v4.9.1 — фикс NCP HALTED, F12 before-input-event, AI на русском",
   "main": "src/main/index.js",
   "private": true,
   "scripts": {
@@ -69,6 +69,9 @@
     "productName": "Призмарин бот",
     "copyright": "Copyright © 2025",
     "asar": true,
+
+    "publish": null,
+
     "directories": {
       "output": "dist-electron"
     },
@@ -83,62 +86,38 @@
       {
         "from": "assets/",
         "to": "assets/",
-        "filter": [
-          "**/*"
-        ]
+        "filter": ["**/*"]
       }
     ],
     "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
       "icon": "assets/icon.ico",
-      "artifactName": "PrizmarinBot-Setup-${version}.${ext}"
-    },
-    "linux": {
       "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "assets/icon.png",
-      "category": "Game",
-      "artifactName": "PrizmarinBot-${version}.${ext}"
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "icon": "assets/icon.icns",
-      "category": "public.app-category.games",
-      "artifactName": "PrizmarinBot-${version}-${arch}.${ext}"
+        { "target": "nsis",     "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "artifactName": "PrizmarinBot-Setup-${version}.${ext}"
     },
-    "artifactName": "PrizmarinBot-${version}-${arch}.${ext}",
-    "publish": {
-      "provider": "github",
-      "owner": "vovaki-coger",
-      "repo": "minecraft-bot-v4",
-      "releaseType": "release"
-    }
+    "portable": {
+      "artifactName": "PrizmarinBot-${version}-portable.${ext}"
+    },
+    "linux": {
+      "target": [{ "target": "AppImage", "arch": ["x64"] }],
+      "icon": "assets/icon.png",
+      "category": "Game",
+      "artifactName": "PrizmarinBot-${version}.${ext}"
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.games",
+      "artifactName": "PrizmarinBot-${version}-${arch}.${ext}"
+    },
+    "artifactName": "PrizmarinBot-${version}-${arch}.${ext}"
   }
 }

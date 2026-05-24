@@ -180,16 +180,25 @@ class BotManager {
   }
 
   _buildOptions(config) {
+    // Версия: "auto"/пусто → undefined → mineflayer определяет сам при handshake
+    const rawVer = (config.version || '').toString().trim();
+    const version = (!rawVer || rawVer === 'auto') ? undefined : rawVer;
+
     const opts = {
       host: config.host,
       port: parseInt(config.port) || 25565,
       username: config.nick,
-      version: config.version || "1.20.1",
-      auth: config.authType === "microsoft" ? "microsoft" : "offline",
+      auth: config.authType === 'microsoft' ? 'microsoft' : 'offline',
       hideErrors: false,
-      connectTimeout: 30000,       // таймаут TCP-подключения 30с (раньше не было)
-      checkTimeoutInterval: 30000, // keepalive: 30с вместо 60с
+      connectTimeout: 30000,
+      checkTimeoutInterval: 30000,
+      // ── Критично для серверов Minecraft 1.19+ ─────────────────────────────
+      // Без этого флага сервер с enforce-secure-profile=true кикает бота сразу.
+      enableChatSigning: false,
     };
+    if (version) opts.version = version;
+    log.info('[BotManager] connect ' + opts.host + ':' + opts.port +
+      ' ver=' + (version || 'auto') + ' auth=' + opts.auth);
     const proxy = config.proxy || this.configManager.get("globalProxy", "");
     if (proxy) {
       const connectFn = this._buildProxyConnect(proxy, opts.host, opts.port);
