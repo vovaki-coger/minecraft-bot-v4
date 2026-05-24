@@ -81,6 +81,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       "bot:aiToggled", "bot:windowOpen", "bot:windowClose", "bot:modelDetected",
       "bot:anarchyStarted", "bot:anarchyStopped", "bot:anarchyPhase", "bot:anarchyLog",
       "bot:taskStarted", "bot:taskStopped", "bot:taskLog",
+      "bot:alert",
       "ollama:pullProgress",
       "coordinator:statusUpdate", "coordinator:taskAssigned", "coordinator:groupChat",
       "update:available", "update:downloadProgress", "update:downloaded", "update:error",

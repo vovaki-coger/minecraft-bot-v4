@@ -1,6 +1,6 @@
 {
   "name": "@workspace/minecraft-bot-4",
-  "version": "4.8.0",
+  "version": "4.9.0",
   "description": "Призмарин бот v4 - фикс античита, phantom-coords, humanizer движения",
   "main": "src/main/index.js",
   "private": true,

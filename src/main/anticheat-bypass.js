@@ -1,14 +1,13 @@
 /**
- * AnticheatBypass v2 — легитимное поведение бота.
+ * AnticheatBypass v2.1 — легитимное поведение бота.
  *
- * Принципы:
- *  • Все пакеты взаимодействия (dig, place, attack) предваряются взглядом на цель
- *    и анимацией руки — ровно как это делает vanilla-клиент.
- *  • Движение — только ходьба (allowSprinting=false уже выставлен в bot-manager).
- *    Position-пакеты НЕ трогаем — GrimAC симулирует физику детерминированно.
- *  • Idle: небольшие случайные повороты головы пока бот стоит — живой игрок
- *    никогда не стоит как статуя.
- *  • Brand — "vanilla", settings-пакет с рандомными locale/view.
+ * ИСПРАВЛЕНИЯ v2.1:
+ *  • smoothLookAt: normalizeAngle() — кратчайший путь, нет разворота на 360°
+ *  • patchDigAndPlace: убран патч bot.attack — async-attack нарушал pathfinder
+ *    и вызывал эффект "ходьбы на месте". bot-tasks.js уже вызывает smoothLookAt
+ *    перед attack, так что двойной патч не нужен.
+ *  • setupIdleBehavior: пропускает случайные повороты пока pathfinder движется
+ *  • Position-пакеты НЕ трогаем — GrimAC симулирует физику детерминированно.
  */
 
 const log = require("electron-log");
@@ -30,7 +29,22 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// ── Плавный поворот головы (микро-джиттер взгляда) ───────────────────────────
+/**
+ * Нормализует угол в диапазон [-π, π].
+ * Критично для smoothLookAt: без этого бот делает разворот через 360°
+ * вместо поворота на кратчайший угол (например, -0.1 рад вместо +6.18).
+ */
+function normalizeAngle(a) {
+  while (a > Math.PI)  a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+}
+
+// ── Плавный поворот головы ────────────────────────────────────────────────────
+//
+// FIX: используем normalizeAngle для разности углов, чтобы выбрать
+// кратчайший путь поворота. Раньше бот крутился на 360° если startYaw и
+// targetYaw были по разные стороны от ±π.
 
 async function smoothLookAt(bot, targetPos, force) {
   if (!bot.entity || !targetPos) return;
@@ -43,9 +57,13 @@ async function smoothLookAt(bot, targetPos, force) {
   const targetPitch = Math.atan2(-dy, Math.sqrt(dx * dx + dz * dz));
   const startYaw    = bot.entity.yaw;
   const startPitch  = bot.entity.pitch;
+
+  // Кратчайшая разность углов → нет разворота через 360°
+  const yawDiff = normalizeAngle(targetYaw - startYaw);
+
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    let yaw   = startYaw   + (targetYaw   - startYaw)   * t + randFloat(-0.008, 0.008);
+    let yaw   = startYaw + yawDiff * t + randFloat(-0.008, 0.008);
     let pitch = startPitch + (targetPitch - startPitch) * t + randFloat(-0.006, 0.006);
     pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
     await bot.look(yaw, pitch, force || false).catch(() => {});
@@ -69,51 +87,50 @@ function randomHitboxPoint(entity) {
 }
 
 // ── Выбор правильной грани блока ─────────────────────────────────────────────
-//
-// Vanilla-клиент отправляет грань, на которую смотрит игрок.
-// GrimAC проверяет, что грань в dig-пакете совпадает с направлением взгляда.
-//
+
 function getBlockFace(bot, block) {
-  if (!bot.entity || !block) return 1; // top by default
+  if (!bot.entity || !block) return 1;
   const eye = bot.entity.position.offset(0, 1.62, 0);
   const center = block.position.offset(0.5, 0.5, 0.5);
   const dx = eye.x - center.x;
   const dy = eye.y - center.y;
   const dz = eye.z - center.z;
   const adx = Math.abs(dx), ady = Math.abs(dy), adz = Math.abs(dz);
-  if (ady >= adx && ady >= adz) return dy > 0 ? 1 : 0; // top / bottom
-  if (adx >= adz) return dx > 0 ? 5 : 4;               // east / west
-  return dz > 0 ? 3 : 2;                               // south / north
+  if (ady >= adx && ady >= adz) return dy > 0 ? 1 : 0;
+  if (adx >= adz) return dx > 0 ? 5 : 4;
+  return dz > 0 ? 3 : 2;
 }
 
 // ── ПАТЧ dig + placeBlock ─────────────────────────────────────────────────────
 //
-// Vanilla-клиент ВСЕГДА:
-//   1. Смотрит на блок/поверхность (look-пакеты)
-//   2. Посылает arm_animation (swing main hand) ДО dig/place
-//   3. Для многотиковой добычи: посылает arm_animation каждый тик
+// FIX v2.1: убран патч bot.attack.
 //
-// Mineflayer без патча: не посылает look и не посылает arm_animation →
-// GrimAC/Vulcan/Intave отбрасывают пакет как "hit air".
+// Проблема с async attack:
+//   Mineflayer и pathfinder вызывают bot.attack() синхронно во внутреннем коде.
+//   Сделав его async, мы возвращаем Promise, который никто не await-ит → look
+//   и sleep из патча выполняются ПАРАЛЛЕЛЬНО с pathfinder-навигацией → конфликт
+//   look-пакетов → бот «ходит на месте» или останавливается.
 //
+//   bot-tasks.js уже вызывает smoothLookAt(bot, hitPoint, true) перед каждым
+//   bot.attack(entity), поэтому двойной патч не нужен.
+
 function patchDigAndPlace(bot) {
   // ── Патч bot.dig ──────────────────────────────────────────────────────────
   const origDig = bot.dig.bind(bot);
   bot.dig = async function patchedDig(block, _forceLook, digFace) {
     if (!block || !bot.entity) return origDig(block, _forceLook, digFace);
 
-    // Берём актуальный блок по координатам
     const fresh = bot.blockAt(block.position);
     if (!fresh || fresh.name === "air" || fresh.name === "cave_air") return;
 
     // 1. Смотрим на правильную грань блока
     const faceNormal = [
-      { x: 0, y: -1, z: 0 }, // 0 bottom
-      { x: 0, y:  1, z: 0 }, // 1 top    ← чаще всего
-      { x: 0, y:  0, z:-1 }, // 2 north
-      { x: 0, y:  0, z: 1 }, // 3 south
-      { x:-1, y:  0, z: 0 }, // 4 west
-      { x: 1, y:  0, z: 0 }, // 5 east
+      { x: 0, y: -1, z:  0 }, // 0 bottom
+      { x: 0, y:  1, z:  0 }, // 1 top
+      { x: 0, y:  0, z: -1 }, // 2 north
+      { x: 0, y:  0, z:  1 }, // 3 south
+      { x:-1, y:  0, z:  0 }, // 4 west
+      { x: 1, y:  0, z:  0 }, // 5 east
     ];
     const face = getBlockFace(bot, fresh);
     const n = faceNormal[face];
@@ -133,7 +150,7 @@ function patchDigAndPlace(bot) {
     let stillDigging = true;
     const animLoop = (async () => {
       while (stillDigging) {
-        await sleep(randInt(52, 68)); // ≈ 1 тик = 50мс
+        await sleep(randInt(52, 68));
         if (stillDigging && bot.entity) {
           try { bot.swingArm("right"); } catch {}
         }
@@ -156,7 +173,6 @@ function patchDigAndPlace(bot) {
   bot.placeBlock = async function patchedPlace(referenceBlock, faceVector, options) {
     if (!bot.entity) return origPlace(referenceBlock, faceVector, options);
 
-    // 1. Смотрим на поверхность куда ставим блок
     const target = referenceBlock.position.offset(
       0.5 + (faceVector.x || 0) * 0.5,
       0.5 + (faceVector.y || 0) * 0.5,
@@ -165,11 +181,9 @@ function patchDigAndPlace(bot) {
     try { await smoothLookAt(bot, target, false); } catch {}
     await sleep(randInt(50, 90));
 
-    // 2. arm_animation перед размещением
     try { bot.swingArm("right"); } catch {}
     await sleep(randInt(28, 52));
 
-    // 3. Ставим блок
     try {
       return await origPlace(referenceBlock, faceVector, options);
     } catch (err) {
@@ -178,25 +192,13 @@ function patchDigAndPlace(bot) {
     }
   };
 
-  // ── Патч bot.attack ───────────────────────────────────────────────────────
-  // Vanilla: смотрит на хитбокс → arm_animation → attack
-  const origAttack = bot.attack.bind(bot);
-  bot.attack = async function patchedAttack(entity) {
-    if (!entity || !bot.entity) return origAttack(entity);
-    const pt = randomHitboxPoint(entity);
-    if (pt) {
-      try { await smoothLookAt(bot, pt, false); } catch {}
-      await sleep(randInt(30, 60));
-    }
-    try { bot.swingArm("right"); } catch {}
-    await sleep(randInt(20, 40));
-    return origAttack(entity);
-  };
-
-  log.info("[AnticheatBypass] Патч dig/place/attack применён");
+  log.info("[AnticheatBypass] Патч dig/place применён (attack без патча — pathfinder-safe)");
 }
 
-// ── Патч пакетов движения (look-джиттер, без позиционного джиттера) ──────────
+// ── Патч пакетов движения (look-джиттер) ─────────────────────────────────────
+//
+// Только look-пакеты: минимальный джиттер ≤ 0.003 рад.
+// Position-пакеты НЕ трогаем — GrimAC предсказывает позицию детерминированно.
 
 function patchMovementPackets(bot) {
   try {
@@ -205,8 +207,6 @@ function patchMovementPackets(bot) {
     const origWrite = client.write.bind(client);
 
     client.write = function(name, data) {
-      // Только look-пакеты: минимальный джиттер взгляда (≤ 0.003 рад)
-      // position/position_look НЕ трогаем — GrimAC предсказывает позицию точно
       if (name === "look" && data.yaw !== undefined) {
         data = {
           ...data,
@@ -241,12 +241,12 @@ function patchSprintDelay(bot) {
   }
 }
 
-// ── Idle-поведение: небольшие повороты головы пока бот стоит ─────────────────
+// ── Idle-поведение ────────────────────────────────────────────────────────────
 //
-// Настоящий игрок никогда не стоит абсолютно неподвижно.
-// Anticheats как Intave/Matrix анализируют движение взгляда — полная неподвижность
-// является одним из сигналов бота.
-//
+// FIX v2.1: пропускаем поворот головы пока pathfinder активно движется.
+// Раньше idle-поворот вызывал bot.look() одновременно с pathfinder-навигацией,
+// что приводило к конфликту и "ходьбе на месте" при активных задачах.
+
 function setupIdleBehavior(bot) {
   let idleTimer = null;
 
@@ -255,7 +255,15 @@ function setupIdleBehavior(bot) {
     idleTimer = setTimeout(async () => {
       if (!bot.entity) { scheduleIdle(); return; }
 
-      // Небольшой случайный поворот (+/- до 25°) — не резкий, плавный
+      // Не мешаем pathfinder — проверяем наличие активной цели
+      const isPathfinding = !!(bot.pathfinder && bot.pathfinder.goal !== null && bot.pathfinder.goal !== undefined);
+      if (isPathfinding) { scheduleIdle(); return; }
+
+      // Также проверяем активные control states (бот идёт вручную)
+      const cs = bot.controlState;
+      const isMovingManually = cs && (cs.forward || cs.back || cs.left || cs.right);
+      if (isMovingManually) { scheduleIdle(); return; }
+
       try {
         const curYaw   = bot.entity.yaw;
         const curPitch = bot.entity.pitch;
@@ -263,6 +271,8 @@ function setupIdleBehavior(bot) {
         const newPitch = Math.max(-1.4, Math.min(0.9, curPitch + randFloat(-0.25, 0.25)));
         const steps = randInt(2, 4);
         for (let i = 1; i <= steps; i++) {
+          // Повторно проверяем pathfinder внутри цикла
+          if (bot.pathfinder?.goal !== null && bot.pathfinder?.goal !== undefined) break;
           const t = i / steps;
           await bot.look(
             curYaw   + (newYaw   - curYaw)   * t + randFloat(-0.004, 0.004),
@@ -273,10 +283,13 @@ function setupIdleBehavior(bot) {
         }
       } catch {}
 
-      // Иногда (15% шанс) — случайный swing рукой (типа игрок кликнул мышкой)
+      // 15% шанс — случайный swing рукой
       if (Math.random() < 0.15 && bot.entity) {
-        await sleep(randInt(200, 800));
-        try { bot.swingArm("right"); } catch {}
+        // Снова проверяем
+        if (!(bot.pathfinder?.goal)) {
+          await sleep(randInt(200, 800));
+          try { bot.swingArm("right"); } catch {}
+        }
       }
 
       scheduleIdle();
@@ -284,11 +297,8 @@ function setupIdleBehavior(bot) {
   }
 
   scheduleIdle();
-
-  // Очищаем таймер при отключении
   bot.once("end", () => { if (idleTimer) clearTimeout(idleTimer); });
-
-  log.info("[AnticheatBypass] Idle-поведение активировано");
+  log.info("[AnticheatBypass] Idle-поведение активировано (pathfinder-safe)");
 }
 
 // ── Обработчик rubber-band ────────────────────────────────────────────────────
@@ -302,7 +312,6 @@ function setupForcedMoveHandler(bot, instance) {
     try { bot.setControlState("jump",   false); } catch {}
     try { bot.setControlState("sprint", false); } catch {}
 
-    // Кулдаун 1.5с перед следующим движением
     instance._antiCheatCooldownUntil = Date.now() + 1500;
 
     if (_forcedMoveTimer) clearTimeout(_forcedMoveTimer);
@@ -315,6 +324,8 @@ function setupForcedMoveHandler(bot, instance) {
 }
 
 // ── Маскировка пакетов при входе ─────────────────────────────────────────────
+//
+// Вызывается ТОЛЬКО для публичных (не-локальных) серверов из bot-manager.js.
 
 function initLoginMasking(bot) {
   try {
@@ -338,10 +349,10 @@ function initLoginMasking(bot) {
         return origWrite(name, { ...data, data: buf });
       }
 
-      // Settings: задержка 120–450мс + рандомизация (locale, viewDistance, skinParts)
+      // Settings: задержка 80–250мс + рандомизация
       if (!settingsMasked && name === "settings") {
         settingsMasked = true;
-        const delay   = randInt(120, 450);
+        const delay   = randInt(80, 250);
         const locales = ["en_US", "ru_RU", "uk_UA", "en_GB", "de_DE", "pl_PL", "fr_FR"];
         const patched = {
           ...data,
@@ -405,8 +416,7 @@ async function doSpawnLookAround(bot) {
   } catch {}
 }
 
-// ── safeDig: копание с проверкой дальности и видимости ───────────────────────
-// (Используется таск-менеджером / внешним кодом)
+// ── safeDig ───────────────────────────────────────────────────────────────────
 
 async function safeDig(bot, block, opts) {
   if (!block || !bot.entity) return false;
@@ -421,7 +431,6 @@ async function safeDig(bot, block, opts) {
     return false;
   }
 
-  // Видимость (line of sight)
   try {
     if (typeof bot.canSeeBlock === "function" && !bot.canSeeBlock(fresh)) {
       log.debug("[AnticheatBypass] safeDig: нет LOS");
@@ -430,7 +439,6 @@ async function safeDig(bot, block, opts) {
   } catch {}
 
   try {
-    // bot.dig уже пропатчен и сам делает look + arm_animation
     await bot.dig(fresh);
     return true;
   } catch (err) {
@@ -461,16 +469,16 @@ async function safeGoto(bot, instance, goal, timeoutMs) {
   }
 }
 
-// ── Главная инициализация (вызывается в spawn-обработчике) ───────────────────
+// ── Главная инициализация ─────────────────────────────────────────────────────
 
 function initAnticheatBypass(bot, instance) {
-  patchDigAndPlace(bot);          // ← ГЛАВНЫЙ ФИК: look + arm_animation для dig/place/attack
-  patchMovementPackets(bot);      // look-джиттер
-  patchSprintDelay(bot);          // задержка включения спринта
-  setupForcedMoveHandler(bot, instance); // rubber-band handler
-  setupIdleBehavior(bot);         // живые движения головы в idle
+  patchDigAndPlace(bot);           // look + arm_animation для dig/place
+  patchMovementPackets(bot);       // look-джиттер
+  patchSprintDelay(bot);           // задержка включения спринта
+  setupForcedMoveHandler(bot, instance);
+  setupIdleBehavior(bot);          // живые движения головы (pathfinder-safe)
 
-  log.info("[AnticheatBypass] Модуль v2 инициализирован для бота", instance.id);
+  log.info("[AnticheatBypass] Модуль v2.1 инициализирован для бота", instance.id);
 }
 
 module.exports = {

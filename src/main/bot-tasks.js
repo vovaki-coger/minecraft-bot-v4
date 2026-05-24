@@ -276,15 +276,24 @@ class TaskManager {
   async _taskCraft(itemName, count) {
     if (!itemName) { this._chat("Что скрафтить?"); return; }
     this._chat("Крафчу " + itemName + "...");
+    const result = await this._chainCraft(itemName, count, 0);
+    this._chat(result.success ? "✅ " + result.msg : "❌ " + result.msg);
+  }
 
-    // Получаем minecraft-data для текущей версии сервера
+  /**
+   * Умный рекурсивный крафт: автоматически крафтит все промежуточные
+   * предметы (доски → палки → верстак → кирка и т.д.)
+   */
+  async _chainCraft(itemName, count, depth) {
+    if (depth > 8) return { success: false, msg: "Слишком глубокая цепочка крафта" };
+    if (!this.bot?.entity) return { success: false, msg: "Бот не подключён" };
+
     let mcData = null;
     try { mcData = require("minecraft-data")(this.bot.version); } catch {}
 
-    // Ищем предмет по registry-имени, displayName или частичному совпадению
-    let item = this.bot.registry.itemsByName[itemName];
+    const ln = itemName.toLowerCase().replace(/\s+/g, "_");
+    let item = this.bot.registry.itemsByName[ln];
     if (!item && mcData) {
-      const ln = itemName.toLowerCase().replace(/\s+/g, "_");
       item = Object.values(mcData.itemsByName).find(i =>
         i.name === ln ||
         (i.displayName || "").toLowerCase() === ln ||
@@ -292,41 +301,90 @@ class TaskManager {
         ln.includes(i.name)
       );
     }
-    if (!item) { this._chat("Не знаю предмет: " + itemName); return; }
+    if (!item) return { success: false, msg: "Не знаю предмет: " + itemName };
 
-    // Ищем верстак рядом (не обязательно — некоторые рецепты 2x2)
-    let table = null;
+    // Уже есть нужное количество?
+    const have = this.bot.inventory.items()
+      .filter(i => i.type === item.id)
+      .reduce((s, i) => s + i.count, 0);
+    if (have >= count) return { success: true, msg: `Уже есть ${have}x ${item.displayName || item.name}` };
+
+    // Ищем верстак
     const craftingTableId = this.bot.registry.blocksByName["crafting_table"]?.id;
-    if (craftingTableId) {
-      table = this.bot.findBlock({ matching: craftingTableId, maxDistance: 16 });
-      if (table) {
-        await this.bot.pathfinder.goto(
-          new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2)
-        ).catch(() => {});
+    let table = craftingTableId
+      ? this.bot.findBlock({ matching: craftingTableId, maxDistance: 16 })
+      : null;
+
+    // Получаем рецепт (с верстаком и без)
+    const allNoTable   = this.bot.recipesAll ? this.bot.recipesAll(item.id, null, null)          : [];
+    const allWithTable = this.bot.recipesAll ? this.bot.recipesAll(item.id, null, table || true) : [];
+    const recipe = (table && allWithTable.length ? allWithTable[0] : null)
+                || allNoTable[0]
+                || allWithTable[0];
+    if (!recipe) return { success: false, msg: "Нет рецепта для " + (item.displayName || item.name) };
+
+    // Собираем нужные ингредиенты из рецепта
+    const needed = {};
+    const ings = recipe.ingredients || (recipe.inShape ? recipe.inShape.flat() : []);
+    for (const ing of ings) {
+      if (!ing || ing.id == null || ing.id < 0) continue;
+      needed[ing.id] = (needed[ing.id] || 0) + (ing.count || 1);
+    }
+
+    // Рекурсивно крафтим всё чего не хватает
+    for (const [idStr, cnt] of Object.entries(needed)) {
+      const id = parseInt(idStr);
+      const haveIng = this.bot.inventory.items()
+        .filter(i => i.type === id)
+        .reduce((s, i) => s + i.count, 0);
+      if (haveIng >= cnt) continue;
+      const ingItem = mcData?.items[id];
+      if (!ingItem) continue;
+      this._log("Нужен " + (ingItem.displayName || ingItem.name) + " x" + (cnt - haveIng) + " — крафчу...");
+      const sub = await this._chainCraft(ingItem.name, cnt - haveIng, depth + 1);
+      if (!sub.success) {
+        return { success: false, msg: "Нет " + (ingItem.displayName || ingItem.name) + ": " + sub.msg };
       }
     }
 
-    try {
-      // recipesAll — все рецепты независимо от наличия материалов в инвентаре
-      // (recipesFor возвращает пустой список если материалов нет)
-      const allWithTable  = this.bot.recipesAll ? this.bot.recipesAll(item.id, null, table) : [];
-      const allNoTable    = this.bot.recipesAll ? this.bot.recipesAll(item.id, null, null)  : [];
-      // Выбираем: сначала рецепты с верстаком, потом 2x2
-      const recipe = (table ? allWithTable[0] : null) || allNoTable[0];
+    // Нужен верстак?
+    const needsTable = recipe.requiresTable || (!allNoTable.length && allWithTable.length > 0);
+    if (needsTable && !table) {
+      let tableItem = this.bot.inventory.items().find(i => i.name === "crafting_table");
+      if (!tableItem) {
+        const tr = await this._chainCraft("crafting_table", 1, depth + 1);
+        if (!tr.success) return { success: false, msg: "Нужен верстак: " + tr.msg };
+        tableItem = this.bot.inventory.items().find(i => i.name === "crafting_table");
+      }
+      if (tableItem) {
+        const refBlock = this.bot.blockAt(this.bot.entity.position.offset(1, -1, 0));
+        if (refBlock) {
+          await this.bot.equip(tableItem, "hand").catch(() => {});
+          await this.bot.placeBlock(refBlock, new Vec3(0, 1, 0)).catch(() => {});
+          await this._sleep(500);
+          table = this.bot.findBlock({ matching: craftingTableId, maxDistance: 8 });
+        }
+      }
+    }
 
-      if (!recipe) {
-        this._chat("Нет рецепта для " + (item.displayName || item.name));
-        return;
-      }
-      await this.bot.craft(recipe, count, recipe.requiresTable ? table : null);
-      this._chat("✅ Скрафтил " + count + "x " + (item.displayName || item.name));
+    if (table) {
+      await this.bot.pathfinder.goto(
+        new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2)
+      ).catch(() => {});
+    }
+
+    try {
+      const finalRecipes = this.bot.recipesAll
+        ? this.bot.recipesAll(item.id, null, table)
+        : (table
+            ? this.bot.recipesFor(item.id, null, 1, table)
+            : this.bot.recipesFor(item.id, null, 1, null));
+      const finalRecipe = finalRecipes?.[0];
+      if (!finalRecipe) return { success: false, msg: "Рецепт недоступен (не хватает ресурсов?)" };
+      await this.bot.craft(finalRecipe, count, table);
+      return { success: true, msg: `Скрафтил ${count}x ${item.displayName || item.name}` };
     } catch (err) {
-      const msg = (err.message || "").toLowerCase();
-      if (msg.includes("not enough") || msg.includes("missing") || msg.includes("cannot")) {
-        this._chat("Нет материалов для крафта: " + (item.displayName || item.name));
-      } else {
-        this._chat("Ошибка крафта: " + (err.message || "").slice(0, 60));
-      }
+      return { success: false, msg: "Ошибка крафта: " + (err.message || "").slice(0, 60) };
     }
   }
 
@@ -453,6 +511,11 @@ class TaskManager {
     this._chat("🌲 Плантация деревьев: " + cropType + " радиус " + radius + "м");
     if (!this.bot?.entity) return;
 
+    // ★ Запоминаем базовую точку фармы — поиск идёт ТОЛЬКО в этом радиусе
+    // и никогда не выходит за пределы в поисках мировых деревьев
+    const farmHome = this.bot.entity.position.clone();
+    const r = Math.min(Math.round(radius), 20);
+
     const TREE_MAP = {
       oak:      { log: "oak_log",      sapling: "oak_sapling",      leaves: "oak_leaves" },
       birch:    { log: "birch_log",    sapling: "birch_sapling",    leaves: "birch_leaves" },
@@ -462,7 +525,7 @@ class TaskManager {
       dark_oak: { log: "dark_oak_log", sapling: "dark_oak_sapling", leaves: "dark_oak_leaves" },
     };
     const tree = TREE_MAP[cropType] || TREE_MAP.oak;
-    const logId = this.bot.registry.blocksByName[tree.log]?.id;
+    const logId     = this.bot.registry.blocksByName[tree.log]?.id;
     const saplingId = this.bot.registry.blocksByName[tree.sapling]?.id;
     if (!logId) { this._chat("Не знаю тип: " + cropType); return; }
 
@@ -471,18 +534,25 @@ class TaskManager {
 
     for (let cycle = 0; cycle < 9999 && this._running; cycle++) {
 
-      // ══ Фаза 1: рубим ВСЕ выросшие деревья в радиусе ════════════
+      // ══ Фаза 1: рубим деревья ТОЛЬКО в зоне фармы ════════════════
+      // Используем matching-функцию которая ограничивает поиск farmHome±r
       let chopCount = 0;
       let logBlock;
-      while (this._running && (logBlock = this.bot.findBlock({ matching: logId, maxDistance: radius }))) {
+      while (this._running && (logBlock = this.bot.findBlock({
+        matching: b => b.type === logId && b.position.distanceTo(farmHome) <= r + 4,
+        maxDistance: r + 8,
+      }))) {
         let bx = Math.floor(logBlock.position.x), bz = Math.floor(logBlock.position.z);
         let by = Math.floor(logBlock.position.y);
-        // Идём к основанию ствола
+
+        // Находим основание ствола
         for (let dy = 0; dy < 20; dy++) {
           const below = this.bot.blockAt(new Vec3(bx, by - 1, bz));
           if (!below || below.name !== tree.log) break;
           by--;
         }
+        const basePos = new Vec3(bx, by, bz);
+
         // Собираем ствол
         const stem = [];
         for (let dy = 0; dy <= 20; dy++) {
@@ -490,7 +560,8 @@ class TaskManager {
           if (!lb || lb.name !== tree.log) break;
           stem.push(lb);
         }
-        this._log("Рублю дерево (" + stem.length + " блоков)");
+        this._log("Рублю дерево x" + stem.length + " на " + bx + "," + by + "," + bz);
+
         for (const lb of stem) {
           if (!this._running) return;
           if (this.bot.entity.position.distanceTo(lb.position) > 4) {
@@ -503,111 +574,158 @@ class TaskManager {
         chopCount += stem.length;
         totalChopped += stem.length;
 
-        // Подбираем выпавшие предметы
+        // Подбираем выпавшее
         await this._sleep(600);
-        const treePos = new Vec3(bx, by, bz);
         const dropped = Object.values(this.bot.entities)
-          .filter(e => e.name === "item" && e.isValid && e.position?.distanceTo(treePos) < 14)
+          .filter(e => e.name === "item" && e.isValid && e.position?.distanceTo(basePos) < 14)
           .slice(0, 20);
-        for (const item of dropped) {
+        for (const itm of dropped) {
           if (!this._running) return;
-          if (item.isValid && item.position?.distanceTo(this.bot.entity.position) > 1.5) {
-            await this.bot.pathfinder.goto(new goals.GoalNear(item.position.x, item.position.y, item.position.z, 1)).catch(() => {});
+          if (itm.isValid && itm.position?.distanceTo(this.bot.entity.position) > 1.5) {
+            await this.bot.pathfinder.goto(
+              new goals.GoalNear(itm.position.x, itm.position.y, itm.position.z, 1)
+            ).catch(() => {});
           }
           await this._sleep(60);
         }
-        if (this.bot.inventory.items().length > 25) await this._depositFarmItems();
-      }
-      if (chopCount > 0) this._log("Срублено: " + chopCount + " блоков");
 
-      // ══ Фаза 2: сажаем саженцы на все доступные места ════════════
-      const saplingItem = this.bot.inventory.items().find(i => i.name === tree.sapling);
-      if (!saplingItem) {
+        // ★ СРАЗУ САЖАЕМ ОБРАТНО на место срубленного дерева ★
+        if (saplingId) {
+          const sapItm = this.bot.inventory.items().find(i => i.name === tree.sapling);
+          if (sapItm) {
+            const groundBlock = this.bot.blockAt(basePos.offset(0, -1, 0));
+            const aboveBlock  = this.bot.blockAt(basePos);
+            if (groundBlock && SOIL.has(groundBlock.name) && aboveBlock && aboveBlock.name === "air") {
+              await safeGoto(this.bot, this.instance, new goals.GoalNear(bx, by, bz, 2), 5000);
+              if (!this._running) return;
+              const sap2 = this.bot.inventory.items().find(i => i.name === tree.sapling);
+              if (sap2) {
+                await this.bot.equip(sap2, "hand").catch(() => {});
+                await this.bot.activateBlock(this.bot.blockAt(basePos.offset(0, -1, 0))).catch(() => {});
+                this._log("↑ Посажен саженец " + bx + "," + by + "," + bz);
+                await this._sleep(150);
+
+                // Костная мука сразу на новый саженец
+                for (let bm = 0; bm < 8 && this._running; bm++) {
+                  const bn = this.bot.inventory.items().find(i => i.name === "bone_meal");
+                  if (!bn) break;
+                  const sapBlock = this.bot.blockAt(basePos);
+                  if (!sapBlock || !sapBlock.name.includes("sapling")) break;
+                  await this.bot.equip(bn, "hand").catch(() => {});
+                  await this.bot.activateBlock(sapBlock).catch(() => {});
+                  await this._sleep(80);
+                }
+              }
+            }
+          }
+        }
+
+        if (this.bot.inventory.items().length > 30) await this._depositFarmItems().catch(() => {});
+      }
+      if (chopCount > 0) this._log("Срублено в цикле #" + (cycle + 1) + ": " + chopCount + " блоков");
+
+      // ══ Фаза 2: сажаем саженцы на пустые места в ЗОНЕ ФАРМЫ ══════
+      const saplingItemCheck = this.bot.inventory.items().find(i => i.name === tree.sapling);
+      if (!saplingItemCheck) {
         this._log("Нет саженцев " + tree.sapling + ". Жду...");
         await this._sleep(8000);
         continue;
       }
-      const base = this.bot.entity.position.clone();
-      const r = Math.min(Math.round(radius), 20);
-      const plantSpots = [];
-      for (let dx = -r; dx <= r; dx += 2) {
-        for (let dz = -r; dz <= r; dz += 2) {
+
+      // Сканируем зону от farmHome (не от текущей позиции бота!)
+      let planted = 0;
+      for (let dx = -r; dx <= r && this._running; dx += 2) {
+        for (let dz = -r; dz <= r && this._running; dz += 2) {
+          const sap = this.bot.inventory.items().find(i => i.name === tree.sapling);
+          if (!sap) break;
+
           for (let dy = -4; dy <= 4; dy++) {
-            const gPos = new Vec3(Math.floor(base.x) + dx, Math.floor(base.y) + dy, Math.floor(base.z) + dz);
+            const gPos = new Vec3(
+              Math.floor(farmHome.x) + dx,
+              Math.floor(farmHome.y) + dy,
+              Math.floor(farmHome.z) + dz
+            );
             const ground = this.bot.blockAt(gPos);
             if (!ground || !SOIL.has(ground.name)) continue;
             const above = this.bot.blockAt(gPos.offset(0, 1, 0));
-            if (!above || above.name !== "air") continue;
-            plantSpots.push(gPos);
+            if (!above || above.name !== "air") break;
+
+            await safeGoto(this.bot, this.instance, new goals.GoalNear(gPos.x, gPos.y + 1, gPos.z, 2), 6000);
+            if (!this._running) return;
+            const sap2 = this.bot.inventory.items().find(i => i.name === tree.sapling);
+            if (!sap2) break;
+            const fg = this.bot.blockAt(gPos);
+            const fa = this.bot.blockAt(gPos.offset(0, 1, 0));
+            if (fg && SOIL.has(fg.name) && fa && fa.name === "air") {
+              await this.bot.equip(sap2, "hand").catch(() => {});
+              await this.bot.activateBlock(fg).catch(() => {});
+              planted++;
+              await this._sleep(120);
+            }
             break;
           }
         }
       }
+      if (planted > 0) this._log("Новых саженцев посажено: " + planted);
 
-      let planted = 0;
-      for (const spot of plantSpots) {
-        if (!this._running) return;
-        const sap = this.bot.inventory.items().find(i => i.name === tree.sapling);
-        if (!sap) break;
-        const ground = this.bot.blockAt(spot);
-        const above = this.bot.blockAt(spot.offset(0, 1, 0));
-        if (!ground || !SOIL.has(ground.name) || !above || above.name !== "air") continue;
-        await this.bot.pathfinder.goto(new goals.GoalNear(spot.x, spot.y + 1, spot.z, 2)).catch(() => {});
-        if (!this._running) return;
-        await this.bot.equip(sap, "hand").catch(() => {});
-        await this.bot.activateBlock(ground).catch(() => {});
-        planted++;
-        await this._sleep(120);
-      }
-      if (planted > 0) this._log("Посажено саженцев: " + planted);
-
-      // ══ Фаза 3: костная мука на все саженцы ══════════════════════
+      // ══ Фаза 3: костная мука на всё что в зоне фармы ══════════════
       if (saplingId) {
-        let bone = this.bot.inventory.items().find(i => i.name === "bone_meal");
-        if (bone) {
-          this._log("Применяю костную муку на саженцы...");
-          let boneUsed = 0;
-          let sapBlock;
-          while (this._running && boneUsed < 120 &&
-              (sapBlock = this.bot.findBlock({ matching: saplingId, maxDistance: radius }))) {
-            const bn = this.bot.inventory.items().find(i => i.name === "bone_meal");
-            if (!bn) break;
-            await this.bot.pathfinder.goto(new goals.GoalNear(sapBlock.position.x, sapBlock.position.y, sapBlock.position.z, 2)).catch(() => {});
-            await this.bot.equip(bn, "hand").catch(() => {});
-            await this.bot.activateBlock(sapBlock).catch(() => {});
-            boneUsed++;
-            await this._sleep(80);
-          }
-          if (boneUsed > 0) this._log("Использовано костной муки: " + boneUsed);
+        let boneUsed = 0;
+        let sapBlock;
+        while (this._running && boneUsed < 80 && (sapBlock = this.bot.findBlock({
+          matching: b => b.type === saplingId && b.position.distanceTo(farmHome) <= r + 4,
+          maxDistance: r + 8,
+        }))) {
+          const bn = this.bot.inventory.items().find(i => i.name === "bone_meal");
+          if (!bn) break;
+          await safeGoto(this.bot, this.instance,
+            new goals.GoalNear(sapBlock.position.x, sapBlock.position.y, sapBlock.position.z, 2), 5000);
+          await this.bot.equip(bn, "hand").catch(() => {});
+          await this.bot.activateBlock(sapBlock).catch(() => {});
+          boneUsed++;
+          await this._sleep(80);
         }
+        if (boneUsed > 0) this._log("Полито костной мукой: " + boneUsed);
       }
 
-      // ══ Фаза 4: ждём роста (с периодической костной мукой) ══════
-      if (saplingId && this.bot.findBlock({ matching: saplingId, maxDistance: radius })) {
+      // ══ Фаза 4: ждём роста ════════════════════════════════════════
+      const hasSaplings = saplingId && this.bot.findBlock({
+        matching: b => b.type === saplingId && b.position.distanceTo(farmHome) <= r + 4,
+        maxDistance: r + 8,
+      });
+      if (hasSaplings) {
         this._log("Жду роста деревьев...");
         for (let w = 0; w < 60 && this._running; w++) {
           await this._sleep(8000);
-          // Проверяем — появились ли брёвна
-          if (this.bot.findBlock({ matching: logId, maxDistance: radius })) {
-            this._log("Деревья выросли! Начинаю рубку...");
-            break;
-          }
-          // Продолжаем поливать костной мукой
-          if (saplingId) {
-            const bn2 = this.bot.inventory.items().find(i => i.name === "bone_meal");
-            const sap2 = bn2 && this.bot.findBlock({ matching: saplingId, maxDistance: radius });
-            if (sap2) {
-              await this.bot.pathfinder.goto(new goals.GoalNear(sap2.position.x, sap2.position.y, sap2.position.z, 2)).catch(() => {});
-              await this.bot.equip(bn2, "hand").catch(() => {});
-              await this.bot.activateBlock(sap2).catch(() => {});
+          const hasLogs = this.bot.findBlock({
+            matching: b => b.type === logId && b.position.distanceTo(farmHome) <= r + 4,
+            maxDistance: r + 8,
+          });
+          if (hasLogs) { this._log("Деревья выросли! Начинаю рубку..."); break; }
+
+          // Поливаем пока ждём
+          const bn3 = this.bot.inventory.items().find(i => i.name === "bone_meal");
+          if (bn3 && saplingId) {
+            const sap3 = this.bot.findBlock({
+              matching: b => b.type === saplingId && b.position.distanceTo(farmHome) <= r + 4,
+              maxDistance: r + 8,
+            });
+            if (sap3) {
+              await safeGoto(this.bot, this.instance,
+                new goals.GoalNear(sap3.position.x, sap3.position.y, sap3.position.z, 2), 5000);
+              await this.bot.equip(bn3, "hand").catch(() => {});
+              await this.bot.activateBlock(sap3).catch(() => {});
               await this._sleep(80);
             }
           }
-          if (w % 4 === 0) this._log("Ожидание роста... " + (w * 8) + "с | цикл #" + (cycle + 1));
+          if (w % 4 === 0) this._log("Ожидание... " + (w * 8) + "с | цикл #" + (cycle + 1));
         }
+      } else if (planted === 0) {
+        this._log("Нет саженцев и нет мест. Жду 15с...");
+        await this._sleep(15000);
       }
 
-      this._log("✅ Цикл #" + (cycle + 1) + " | всего срублено: " + totalChopped + " блоков");
+      this._log("✅ Цикл #" + (cycle + 1) + " | всего срублено: " + totalChopped);
       await this._sleep(500);
     }
     this._chat("🌲 Ферма деревьев остановлена. Срублено: " + totalChopped + " блоков");

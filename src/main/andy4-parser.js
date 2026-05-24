@@ -252,55 +252,105 @@ async function findAndGoToBlock(bot, blockName, maxDist = 64) {
 // КРАФТИНГ — умный крафт через mineflayer API
 // ══════════════════════════════════════════════════════════════
 
-async function craftItem(bot, itemName, count = 1) {
+/**
+ * Умный рекурсивный крафт — автоматически строит цепочку:
+ * logs → planks → sticks → crafting_table → wooden_pickaxe
+ * Параметр _depth защищает от бесконечной рекурсии.
+ */
+async function craftItem(bot, itemName, count = 1, _depth = 0) {
+  if (_depth > 8) return { success: false, msg: "Слишком глубокая цепочка крафта" };
+
   const mcData = require("minecraft-data")(bot.version);
   const normalizedName = itemName.toLowerCase().replace(/ /g, "_");
 
   // Находим item по имени
-  const item = mcData.itemsByName[normalizedName];
+  let item = mcData.itemsByName[normalizedName];
   if (!item) {
-    // Пробуем частичное совпадение
     const candidates = Object.values(mcData.itemsByName)
       .filter(i => i.name.includes(normalizedName));
     if (candidates.length === 0) return { success: false, msg: `Предмет '${itemName}' не найден` };
-    return craftItem(bot, candidates[0].name, count);
+    return craftItem(bot, candidates[0].name, count, _depth);
   }
 
-  // Проверяем рецепты без верстака
-  let recipes = bot.recipesFor(item.id, null, 1, null);
+  // Уже есть нужное количество?
+  const have = bot.inventory.items()
+    .filter(i => i.type === item.id)
+    .reduce((s, i) => s + i.count, 0);
+  if (have >= count) return { success: true, msg: `Уже есть ${have}x ${itemName}` };
+
+  // Ищем рецепты без верстака
+  let recipes = bot.recipesAll
+    ? bot.recipesAll(item.id, null, null)
+    : bot.recipesFor(item.id, null, 1, null);
   let craftingTable = null;
+  const craftingTableId = mcData.blocksByName["crafting_table"]?.id;
+  let needsTable = !recipes || recipes.length === 0;
 
-  if (!recipes || recipes.length === 0) {
-    // Нужен верстак
-    recipes = bot.recipesFor(item.id, null, 1, true);
+  if (needsTable) {
+    recipes = bot.recipesAll
+      ? bot.recipesAll(item.id, null, true)
+      : bot.recipesFor(item.id, null, 1, true);
     if (!recipes || recipes.length === 0) {
-      return { success: false, msg: `Нет рецепта для '${itemName}' или не хватает ресурсов` };
+      return { success: false, msg: `Нет рецепта для '${itemName}'` };
     }
+  }
 
-    // Ищем верстак поблизости
-    craftingTable = bot.findBlock({ matching: mcData.blocksByName["crafting_table"]?.id, maxDistance: 16 });
+  const recipe = recipes[0];
+
+  // ── Рекурсивный крафт недостающих ингредиентов ───────────────────
+  const needed = {};
+  const ings = recipe.ingredients || (recipe.inShape ? recipe.inShape.flat() : []);
+  for (const ing of ings) {
+    if (!ing || ing.id == null || ing.id < 0) continue;
+    needed[ing.id] = (needed[ing.id] || 0) + (ing.count || 1);
+  }
+  for (const [idStr, cnt] of Object.entries(needed)) {
+    const id = parseInt(idStr);
+    const haveIng = bot.inventory.items()
+      .filter(i => i.type === id)
+      .reduce((s, i) => s + i.count, 0);
+    if (haveIng >= cnt) continue;
+    const ingItem = mcData.items[id];
+    if (!ingItem) continue;
+    const sub = await craftItem(bot, ingItem.name, cnt - haveIng, _depth + 1);
+    if (!sub.success) {
+      return { success: false, msg: `Нет ${ingItem.displayName || ingItem.name}: ${sub.msg}` };
+    }
+  }
+
+  // ── Верстак ───────────────────────────────────────────────────────
+  if (needsTable) {
+    craftingTable = craftingTableId
+      ? bot.findBlock({ matching: craftingTableId, maxDistance: 16 })
+      : null;
 
     if (!craftingTable) {
-      // Пробуем поставить свой верстак
-      const tableItem = getInventoryItem(bot, "crafting_table");
+      let tableItem = getInventoryItem(bot, "crafting_table");
       if (!tableItem) {
-        return { success: false, msg: "Нужен верстак для крафта '" + itemName + "', но его нет в инвентаре" };
+        // Крафтим верстак рекурсивно
+        const tr = await craftItem(bot, "crafting_table", 1, _depth + 1);
+        if (!tr.success) return { success: false, msg: "Нужен верстак для '" + itemName + "'" };
+        tableItem = getInventoryItem(bot, "crafting_table");
       }
-      const pos = bot.entity.position.offset(1, 0, 0);
-      try {
+      if (tableItem) {
+        const pos = bot.entity.position.offset(1, 0, 0);
         const refBlock = bot.blockAt(pos.offset(0, -1, 0));
         if (refBlock) {
-          await bot.equip(tableItem, "hand");
-          await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
+          await bot.equip(tableItem, "hand").catch(() => {});
+          await bot.placeBlock(refBlock, new Vec3(0, 1, 0)).catch(() => {});
           await sleep(500);
-          craftingTable = bot.findBlock({ matching: mcData.blocksByName["crafting_table"]?.id, maxDistance: 8 });
+          craftingTable = bot.findBlock({ matching: craftingTableId, maxDistance: 8 });
         }
-      } catch {}
+      }
     }
 
     if (craftingTable) {
-      await bot.pathfinder.goto(new goals.GoalNear(craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 2));
-      recipes = bot.recipesFor(item.id, null, 1, craftingTable);
+      await bot.pathfinder.goto(
+        new goals.GoalNear(craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 2)
+      ).catch(() => {});
+      recipes = bot.recipesAll
+        ? bot.recipesAll(item.id, null, craftingTable)
+        : bot.recipesFor(item.id, null, 1, craftingTable);
     }
   }
 

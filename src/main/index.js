@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Notification } = require("electron");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
 const { OllamaManager } = require("./ollama-manager");
@@ -44,17 +44,19 @@ function setupAutoUpdater() {
     if (mainWindow) mainWindow.webContents.send("update:error", err.message);
   });
 
-  // Проверяем обновления через 8 секунд после запуска и каждый час
   setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 8000);
   setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 60 * 60 * 1000);
 }
 
-let mainWindow = null;
+let mainWindow   = null;
+let overlayWindow = null;
 let ollamaManager = null;
 let botManager = null;
 let coordinatorServer = null;
 let configManager = null;
 let ankaRecorder = null;
+
+// ── Главное окно ──────────────────────────────────────────────────────────────
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -64,7 +66,7 @@ function createWindow() {
     minHeight: 700,
     backgroundColor: "#05070f",
     titleBarStyle: "default",
-    title: "Призмарин Бот v4.8.0",
+    title: "Призмарин Бот v4.9.0",
     icon: path.join(__dirname, "../../assets/icon.png"),
     webPreferences: {
       nodeIntegration: false,
@@ -86,20 +88,110 @@ function createWindow() {
   });
 }
 
+// ── Overlay окно (F12) ────────────────────────────────────────────────────────
+
+function createOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.show();
+    overlayWindow.focus();
+    return;
+  }
+
+  const { screen } = require("electron");
+  const { width: sw } = screen.getPrimaryDisplay().workAreaSize;
+
+  overlayWindow = new BrowserWindow({
+    width: 270,
+    height: 430,
+    x: sw - 290,
+    y: 40,
+    alwaysOnTop: true,
+    transparent: true,
+    frame: false,
+    resizable: false,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "../preload/overlay.js"),
+      webSecurity: !isDev,
+    },
+  });
+
+  // Поверх всего (включая полноэкранные приложения)
+  overlayWindow.setAlwaysOnTop(true, "screen-saver");
+
+  const overlayHtml = isDev
+    ? path.join(__dirname, "overlay.html")
+    : path.join(__dirname, "overlay.html");
+
+  overlayWindow.loadFile(overlayHtml);
+
+  overlayWindow.once("ready-to-show", () => {
+    overlayWindow.show();
+  });
+
+  overlayWindow.on("closed", () => {
+    overlayWindow = null;
+  });
+
+  log.info("[Overlay] Окно создано");
+}
+
+function toggleOverlay() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) {
+    createOverlayWindow();
+  } else if (overlayWindow.isVisible()) {
+    overlayWindow.hide();
+  } else {
+    overlayWindow.show();
+    overlayWindow.focus();
+  }
+}
+
+// ── Рассылка событий (главное окно + overlay) ────────────────────────────────
+
+function broadcastEvent(event, data) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(event, data);
+  }
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send(event, data);
+  }
+
+  // Системное уведомление о смерти бота
+  if (event === "bot:death" || (event === "bot:alert" && data?.type === "death")) {
+    try {
+      if (Notification.isSupported()) {
+        new Notification({
+          title: "💀 Бот умер!",
+          body:  "Ник: " + (data.nick || data.config?.nick || "Бот"),
+          urgency: "normal",
+        }).show();
+      }
+    } catch {}
+  }
+}
+
+// ── Инициализация ─────────────────────────────────────────────────────────────
+
 async function initialize() {
   configManager = new ConfigManager();
   ollamaManager = new OllamaManager(configManager);
-  botManager = new BotManager(configManager, ollamaManager, (event, data) => {
-    if (mainWindow) mainWindow.webContents.send(event, data);
-  });
+
+  botManager = new BotManager(configManager, ollamaManager, broadcastEvent);
+
   coordinatorServer = new CoordinatorServer(botManager, (event, data) => {
-    if (mainWindow) mainWindow.webContents.send(event, data);
+    broadcastEvent(event, data);
   });
 
   ankaRecorder = new AnkaRecorder();
   setupIpcHandlers();
   await coordinatorServer.start();
 }
+
+// ── IPC-обработчики ───────────────────────────────────────────────────────────
 
 function setupIpcHandlers() {
   ipcMain.handle("config:get", () => configManager.getAll());
@@ -117,8 +209,7 @@ function setupIpcHandlers() {
   ipcMain.handle("ollama:listInstalledModels", () => ollamaManager.listInstalledModels());
   ipcMain.handle("ollama:pullModel", (_e, modelName) =>
     ollamaManager.pullModel(modelName, (progress) => {
-      if (mainWindow)
-        mainWindow.webContents.send("ollama:pullProgress", { modelName, progress });
+      broadcastEvent("ollama:pullProgress", { modelName, progress });
     })
   );
   ipcMain.handle("ollama:deleteModel", (_e, modelName) =>
@@ -207,7 +298,6 @@ function setupIpcHandlers() {
   });
   ipcMain.handle("anka:clickSlot", async (_e, botId, slot, button) => {
     const result = await botManager.clickBotSlot(botId, slot, button);
-    // Записываем шаг в бэкенде где у нас точно есть правильный номер слота
     if (ankaRecorder.isRecording(botId)) {
       const instance = botManager.getInstanceForAnka(botId);
       let winTitle = "__inventory__";
@@ -224,7 +314,15 @@ function setupIpcHandlers() {
     }
     return result;
   });
+
   ipcMain.handle("shell:openExternal", (_e, url) => shell.openExternal(url));
+
+  // ── Overlay ────────────────────────────────────────────────────────────────
+  ipcMain.on("overlay:close", () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.hide();
+    }
+  });
 
   // ── Автообновление ─────────────────────────────────────────────────────────
   ipcMain.handle("update:check",    () => autoUpdater.checkForUpdates().catch((e) => ({ error: e.message })));
@@ -232,10 +330,20 @@ function setupIpcHandlers() {
   ipcMain.handle("update:install",  () => { autoUpdater.quitAndInstall(false, true); });
 }
 
+// ── Запуск ────────────────────────────────────────────────────────────────────
+
 app.whenReady().then(async () => {
   await initialize();
   createWindow();
   setupAutoUpdater();
+
+  // F12 — показать/скрыть overlay (глобальный хоткей, работает даже в фоне)
+  const registered = globalShortcut.register("F12", toggleOverlay);
+  if (registered) {
+    log.info("[Overlay] F12 зарегистрирован");
+  } else {
+    log.warn("[Overlay] F12 уже занят другой программой");
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -243,11 +351,13 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", async () => {
+  globalShortcut.unregisterAll();
   await botManager?.disconnectAll();
   await coordinatorServer?.stop();
   if (process.platform !== "darwin") app.quit();
 });
 
 app.on("before-quit", async () => {
+  globalShortcut.unregisterAll();
   await botManager?.disconnectAll();
 });

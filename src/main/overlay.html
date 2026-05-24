@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrizmarinBot</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: transparent;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      user-select: none;
+      overflow: hidden;
+    }
+    .panel {
+      background: rgba(6, 10, 22, 0.90);
+      border: 1px solid rgba(99,179,237,0.22);
+      border-radius: 10px;
+      width: 260px;
+      overflow: hidden;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .header {
+      background: rgba(15, 25, 55, 0.92);
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      -webkit-app-region: drag;
+      border-bottom: 1px solid rgba(99,179,237,0.12);
+      cursor: move;
+    }
+    .header-title { color: #63b3ed; font-weight: 600; font-size: 12px; letter-spacing: 0.3px; }
+    .header-right { display: flex; align-items: center; gap: 4px; -webkit-app-region: no-drag; }
+    .btn-icon {
+      background: none; border: none; color: #4a5568;
+      cursor: pointer; font-size: 14px; line-height: 1;
+      padding: 1px 4px; border-radius: 4px; transition: all 0.15s;
+    }
+    .btn-icon:hover { background: rgba(255,255,255,0.08); color: #cbd5e0; }
+    .btn-close:hover { color: #fc8181; }
+    .body { padding: 10px 12px; }
+
+    .bot-status {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding-bottom: 9px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      margin-bottom: 9px;
+    }
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+      background: #718096;
+      box-shadow: 0 0 0 2px rgba(113,128,150,0.3);
+      transition: all 0.3s;
+    }
+    .status-dot.online  { background: #48bb78; box-shadow: 0 0 0 2px rgba(72,187,120,0.3); }
+    .status-dot.connecting { background: #f6ad55; box-shadow: 0 0 0 2px rgba(246,173,85,0.3); animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+    .bot-nick { color: #90cdf4; font-size: 12px; font-weight: 500; }
+    .task-badge {
+      margin-left: auto; font-size: 10px;
+      background: rgba(99,179,237,0.12); color: #63b3ed;
+      padding: 1px 6px; border-radius: 8px;
+      max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    .section { margin-bottom: 8px; }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 0;
+    }
+    .row-label { color: #a0aec0; font-size: 12px; display: flex; align-items: center; gap: 5px; }
+    .row-label.active { color: #68d391; }
+
+    .toggle {
+      position: relative;
+      width: 34px; height: 18px;
+      -webkit-app-region: no-drag;
+      cursor: pointer;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: #2d3748; border-radius: 9px;
+      transition: background 0.2s;
+    }
+    .toggle-track::before {
+      content: "";
+      position: absolute; left: 2px; top: 2px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #718096;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle input:checked + .toggle-track { background: #22543d; }
+    .toggle input:checked + .toggle-track::before { transform: translateX(16px); background: #68d391; }
+
+    .sub-row {
+      display: flex; align-items: center; gap: 5px;
+      padding: 2px 0 5px 18px;
+    }
+    .sub-label { color: #4a5568; font-size: 11px; }
+    select {
+      background: #1a202c; color: #90cdf4;
+      border: 1px solid #2d3748; border-radius: 4px;
+      padding: 1px 5px; font-size: 11px;
+      -webkit-app-region: no-drag; cursor: pointer;
+      outline: none;
+    }
+    select:focus { border-color: #4a90d9; }
+
+    hr { border: none; border-top: 1px solid rgba(255,255,255,0.05); margin: 6px 0; }
+
+    .btn-row { display: flex; gap: 6px; margin-top: 9px; }
+    .btn {
+      flex: 1; padding: 5px 6px;
+      border-radius: 5px; border: none;
+      font-size: 11px; cursor: pointer; font-weight: 500;
+      -webkit-app-region: no-drag;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn:active { transform: scale(0.97); }
+    .btn-stop    { background: rgba(116,42,42,0.7); color: #fc8181; border: 1px solid rgba(252,129,129,0.2); }
+    .btn-connect { background: rgba(28,69,50,0.7); color: #68d391; border: 1px solid rgba(104,211,145,0.2); }
+
+    .death-banner {
+      display: none;
+      background: rgba(116,42,42,0.75);
+      border: 1px solid rgba(252,129,129,0.3);
+      border-radius: 6px;
+      padding: 5px 9px;
+      color: #fc8181;
+      font-size: 11px;
+      margin-top: 8px;
+      animation: slideIn 0.2s ease;
+    }
+    .death-banner.show { display: flex; align-items: center; gap: 6px; }
+    @keyframes slideIn { from { opacity:0; transform: translateY(-4px); } to { opacity:1; transform: none; } }
+
+    .hotkey-hint {
+      text-align: center; color: #2d3748; font-size: 10px;
+      padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.04);
+      margin-top: 6px;
+    }
+    .no-bot { color: #4a5568; font-size: 11px; padding: 8px 0 4px; text-align: center; }
+  </style>
+</head>
+<body>
+<div class="panel">
+  <div class="header">
+    <span class="header-title">🤖 PrizmarinBot</span>
+    <div class="header-right">
+      <button class="btn-icon" onclick="refreshBots()" title="Обновить">↻</button>
+      <button class="btn-icon btn-close" onclick="closeOverlay()" title="Скрыть (F12)">✕</button>
+    </div>
+  </div>
+  <div class="body">
+    <!-- Статус бота -->
+    <div class="bot-status">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="bot-nick" id="botNick">Нет бота</span>
+      <span class="task-badge" id="taskBadge" style="display:none"></span>
+    </div>
+
+    <div id="mainControls">
+      <!-- Ферма деревьев -->
+      <div class="section">
+        <div class="row">
+          <span class="row-label" id="farmLabel">🌲 Ферма деревьев</span>
+          <label class="toggle">
+            <input type="checkbox" id="farmToggle" onchange="onFarmToggle()">
+            <div class="toggle-track"></div>
+          </label>
+        </div>
+        <div class="sub-row">
+          <span class="sub-label">Тип:</span>
+          <select id="treeType">
+            <option value="oak">Дуб</option>
+            <option value="birch">Берёза</option>
+            <option value="spruce">Ель</option>
+            <option value="jungle">Джунгли</option>
+            <option value="acacia">Акация</option>
+            <option value="dark_oak">Тёмный дуб</option>
+          </select>
+        </div>
+      </div>
+
+      <hr>
+
+      <!-- Ферма культур -->
+      <div class="section">
+        <div class="row">
+          <span class="row-label" id="cropLabel">🌾 Ферма культур</span>
+          <label class="toggle">
+            <input type="checkbox" id="cropToggle" onchange="onCropToggle()">
+            <div class="toggle-track"></div>
+          </label>
+        </div>
+        <div class="sub-row">
+          <span class="sub-label">Культура:</span>
+          <select id="cropType">
+            <option value="wheat">Пшеница</option>
+            <option value="carrot">Морковь</option>
+            <option value="potato">Картошка</option>
+            <option value="beetroot">Свёкла</option>
+            <option value="melon">Дыня</option>
+            <option value="pumpkin">Тыква</option>
+            <option value="nether_wart">Адский гриб</option>
+          </select>
+        </div>
+      </div>
+
+      <hr>
+
+      <!-- Режим анархии -->
+      <div class="row">
+        <span class="row-label" id="anarchyLabel">⚔ Режим анархии</span>
+        <label class="toggle">
+          <input type="checkbox" id="anarchyToggle" onchange="onAnarchyToggle()">
+          <div class="toggle-track"></div>
+        </label>
+      </div>
+
+      <hr>
+
+      <!-- Кнопки -->
+      <div class="btn-row">
+        <button class="btn btn-stop" onclick="stopAll()">⏹ Стоп всё</button>
+        <button class="btn btn-connect" id="connectBtn" onclick="toggleConnect()">▶ Старт</button>
+      </div>
+
+      <!-- Уведомление о смерти -->
+      <div class="death-banner" id="deathBanner">
+        <span>💀</span>
+        <span id="deathText">Бот умер!</span>
+      </div>
+    </div>
+
+    <div class="hotkey-hint">F12 — скрыть / показать</div>
+  </div>
+</div>
+
+<script>
+let currentBotId = null;
+let currentStatus = "offline";
+let farmActive = false;
+let cropActive = false;
+let anarchyActive = false;
+let deathTimer = null;
+const unsubs = [];
+
+async function init() {
+  try {
+    const bots = await overlayAPI.getBots();
+    if (bots && bots.length > 0) {
+      selectBot(bots[0]);
+    }
+  } catch (e) {
+    console.error("init error", e);
+  }
+
+  unsubs.push(overlayAPI.on("bot:statusChanged", (d) => {
+    if (d.botId !== currentBotId) return;
+    currentStatus = d.status || "offline";
+    setDot(currentStatus);
+    document.getElementById("connectBtn").textContent =
+      currentStatus === "online" ? "⏹ Стоп бот" : "▶ Старт";
+  }));
+
+  unsubs.push(overlayAPI.on("bot:death", (d) => {
+    if (d.botId !== currentBotId) return;
+    showDeath(d.nick || "Бот");
+  }));
+
+  unsubs.push(overlayAPI.on("bot:alert", (d) => {
+    if (d.botId !== currentBotId) return;
+    if (d.type === "death") showDeath(d.nick || "Бот");
+  }));
+
+  unsubs.push(overlayAPI.on("bot:taskStarted", (d) => {
+    if (d.botId !== currentBotId) return;
+    const badge = document.getElementById("taskBadge");
+    badge.textContent = d.task || "";
+    badge.style.display = d.task ? "" : "none";
+  }));
+
+  unsubs.push(overlayAPI.on("bot:taskStopped", (d) => {
+    if (d.botId !== currentBotId) return;
+    document.getElementById("taskBadge").style.display = "none";
+    resetToggles();
+  }));
+}
+
+function selectBot(bot) {
+  currentBotId = bot.id;
+  currentStatus = bot.status || "offline";
+  document.getElementById("botNick").textContent = bot.config?.nick || "Бот";
+  setDot(currentStatus);
+  document.getElementById("connectBtn").textContent =
+    currentStatus === "online" ? "⏹ Стоп бот" : "▶ Старт";
+}
+
+function setDot(status) {
+  const dot = document.getElementById("statusDot");
+  dot.className = "status-dot " + status;
+}
+
+function showDeath(nick) {
+  if (deathTimer) clearTimeout(deathTimer);
+  document.getElementById("deathText").textContent = nick + " умер!";
+  document.getElementById("deathBanner").classList.add("show");
+  deathTimer = setTimeout(() => {
+    document.getElementById("deathBanner").classList.remove("show");
+  }, 8000);
+}
+
+function resetToggles() {
+  farmActive = false; cropActive = false;
+  document.getElementById("farmToggle").checked = false;
+  document.getElementById("cropToggle").checked = false;
+  document.getElementById("farmLabel").className = "row-label";
+  document.getElementById("cropLabel").className = "row-label";
+}
+
+async function onFarmToggle() {
+  if (!currentBotId) return;
+  const on = document.getElementById("farmToggle").checked;
+  farmActive = on;
+  document.getElementById("farmLabel").className = "row-label" + (on ? " active" : "");
+  if (on) {
+    cropActive = false;
+    document.getElementById("cropToggle").checked = false;
+    document.getElementById("cropLabel").className = "row-label";
+    const tree = document.getElementById("treeType").value;
+    await overlayAPI.runTask(currentBotId, "farm_trees", { radius: 12, crop: tree }).catch(() => {});
+  } else {
+    await overlayAPI.stopTask(currentBotId).catch(() => {});
+  }
+}
+
+async function onCropToggle() {
+  if (!currentBotId) return;
+  const on = document.getElementById("cropToggle").checked;
+  cropActive = on;
+  document.getElementById("cropLabel").className = "row-label" + (on ? " active" : "");
+  if (on) {
+    farmActive = false;
+    document.getElementById("farmToggle").checked = false;
+    document.getElementById("farmLabel").className = "row-label";
+    const crop = document.getElementById("cropType").value;
+    await overlayAPI.runTask(currentBotId, "farm_crops", { crop, radius: 12 }).catch(() => {});
+  } else {
+    await overlayAPI.stopTask(currentBotId).catch(() => {});
+  }
+}
+
+async function onAnarchyToggle() {
+  if (!currentBotId) return;
+  const on = document.getElementById("anarchyToggle").checked;
+  anarchyActive = on;
+  document.getElementById("anarchyLabel").className = "row-label" + (on ? " active" : "");
+  if (on) {
+    await overlayAPI.startAnarchy(currentBotId, {}).catch(() => {});
+  } else {
+    await overlayAPI.stopAnarchy(currentBotId).catch(() => {});
+  }
+}
+
+async function stopAll() {
+  if (!currentBotId) return;
+  resetToggles();
+  anarchyActive = false;
+  document.getElementById("anarchyToggle").checked = false;
+  document.getElementById("anarchyLabel").className = "row-label";
+  await overlayAPI.stopTask(currentBotId).catch(() => {});
+  await overlayAPI.stopAnarchy(currentBotId).catch(() => {});
+}
+
+async function toggleConnect() {
+  if (!currentBotId) return;
+  if (currentStatus === "online") {
+    await overlayAPI.disconnect(currentBotId).catch(() => {});
+  } else {
+    await overlayAPI.connect(currentBotId).catch(() => {});
+  }
+}
+
+async function refreshBots() {
+  try {
+    const bots = await overlayAPI.getBots();
+    if (bots && bots.length > 0) selectBot(bots[0]);
+  } catch {}
+}
+
+function closeOverlay() {
+  overlayAPI.closeOverlay();
+}
+
+// Дерево: обновить задачу при смене типа без снятия тоггла
+document.getElementById("treeType").addEventListener("change", () => {
+  if (farmActive && currentBotId) {
+    const tree = document.getElementById("treeType").value;
+    overlayAPI.runTask(currentBotId, "farm_trees", { radius: 12, crop: tree }).catch(() => {});
+  }
+});
+
+document.getElementById("cropType").addEventListener("change", () => {
+  if (cropActive && currentBotId) {
+    const crop = document.getElementById("cropType").value;
+    overlayAPI.runTask(currentBotId, "farm_crops", { crop, radius: 12 }).catch(() => {});
+  }
+});
+
+init();
+</script>
+</body>
+</html>
