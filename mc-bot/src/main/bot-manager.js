@@ -267,26 +267,21 @@ class BotManager {
       }
 
       // ══════════════════════════════════════════════════════════════════
-      // АНТИ-ЧИТ: packet-level physics validation
+      // АНТИ-ЧИТ: минимальное безопасное вмешательство
       //
-      // Архитектура mineflayer physics loop (каждые 50 ms):
-      //   1. control states → acceleration
-      //   2. gravity + drag → velocity update
-      //   3. collision resolution → position update
-      //   4. «physicsTick» event fires           ← МЫ ВМЕШИВАЕМСЯ ЗДЕСЬ
-      //   5. position/position_look packet sent   ← пакет уже корректный
+      // ❌ УБРАНО: physicsTick velocity clamp — клампит velocity ПОСЛЕ того
+      //    как позиция уже обновлена физикой. Итог: позиция и velocity
+      //    расходятся → сервер видит "Invalid move player packet" → HALTED.
       //
-      // Правило: не дропаем и не задерживаем пакеты — мы клампим velocity
-      // ДО отправки, поэтому сервер получает физически возможную позицию.
+      // ❌ УБРАНО: _client.write onGround override — неправильная логика
+      //    определения земли вызывает флаг onGround=false в момент когда бот
+      //    стоит → NoFall детектор срабатывает → бан.
       //
-      // Vanilla constants (1.20.x):
-      //   walk  = 0.21585 bpt   sprint = 0.2806 bpt
-      //   jump  = 0.42 bpt      gravity = 0.08 bpt²
-      //   termV = 3.92 bpt (downward)
-      //   airDrag = 0.98        groundFriction = 0.546 (0.91 * 0.6)
+      // ✅ ОСТАВЛЕНО: только настройки pathfinder (без спринта/паркура) —
+      //    именно это контролирует скорость физически корректно.
       // ══════════════════════════════════════════════════════════════════
 
-      // ── 1. Pathfinder: только physically-valid moves ─────────────────
+      // ── Pathfinder: только physically-valid moves ─────────────────
       const movements = new Movements(bot);
       movements.allowSprinting   = false;
       movements.canDig           = true;
@@ -297,79 +292,19 @@ class BotManager {
       movements.canOpenDoors     = true;
       bot.pathfinder.setMovements(movements);
 
-      // ── 2. physics settings — точно vanilla ─────────────────────────
+      // ── Перехват переброса в другой мир (BungeeCord/Velocity) ────────
+      // При смене сервера приходит пакет 'login' на том же соединении.
+      // Останавливаем движение чтобы не накопить Invalid move пакеты.
       try {
-        if (bot.physics) {
-          bot.physics.gravity        = 0.08;
-          bot.physics.airdrag        = 0.98;
-          bot.physics.groundFriction = 0.6;
-          bot.physics.stepHeight     = 0.6;
-          // НЕ меняем walkSpeed/sprintSpeed — это multiplier внутри движка,
-          // физически некорректно выставлять их ниже vanilla; вместо этого
-          // клампим итоговый velocity в physicsTick
-        }
-      } catch(e) { log.warn("[AC] physics settings:", e.message); }
-
-      // ── 3. physicsTick velocity clamp ───────────────────────────────
-      // Срабатывает ПОСЛЕ вычисления физики, ДО отправки пакета позиции.
-      // Клампим horizontal velocity до vanilla walk limit.
-      // Это гарантирует что position-пакет содержит физически возможное значение.
-      {
-        const WALK_MAX  = 0.215;  // чуть ниже vanilla 0.21585 — запас на float
-        const TERM_VEL  = 3.92;   // terminal velocity (вниз)
-
-        // Запоминаем последнюю подтверждённую сервером позицию
-        // (сервер шлёт position_and_look когда он корректирует нас)
-        let _serverPos = null;
-        bot.on('forcedMove', () => {
-          if (bot.entity) _serverPos = bot.entity.position.clone();
+        bot._client.on('login', () => {
+          log.info("[BotManager] Смена мира/сервера (BungeeCord), останавливаем движение");
+          try { bot.clearControlStates(); } catch {}
+          try { bot.pathfinder.stop(); }    catch {}
+          try { instance.taskManager?.stopCurrent?.(); } catch {}
         });
+      } catch {}
 
-        const _tickHandler = () => {
-          if (!bot.entity) return;
-          const vel = bot.entity.velocity;
-
-          // Горизонтальный кламп
-          const hSq = vel.x * vel.x + vel.z * vel.z;
-          if (hSq > WALK_MAX * WALK_MAX) {
-            const scale = WALK_MAX / Math.sqrt(hSq);
-            vel.x *= scale;
-            vel.z *= scale;
-          }
-
-          // Вертикальный кламп (terminal velocity)
-          if (vel.y < -TERM_VEL) vel.y = -TERM_VEL;
-        };
-
-        bot.on('physicsTick', _tickHandler);
-        bot.once('end', () => { try { bot.removeListener('physicsTick', _tickHandler); } catch {} });
-      }
-
-      // ── 4. Packet-level onGround correction ─────────────────────────
-      // Один из самых частых банов: onGround=true когда бот в воздухе.
-      // Перехватываем write, но НЕ дропаем — только исправляем флаг.
-      {
-        const _origWrite = bot._client.write.bind(bot._client);
-        bot._client.write = function(name, params) {
-          if ((name === 'position' || name === 'position_look') && params && bot.entity) {
-            // Проверяем есть ли твёрдый блок под ногами (в пределах 0.05 блока)
-            try {
-              const below = bot.blockAt(bot.entity.position.offset(0, -0.1, 0));
-              const actualOnGround = below && below.boundingBox === 'block'
-                ? bot.entity.position.y - Math.floor(bot.entity.position.y) < 0.05
-                : false;
-              // Если физика говорит onGround но блока нет — исправляем
-              if (params.onGround && !actualOnGround && bot.entity.velocity.y < -0.1) {
-                params = { ...params, onGround: false };
-              }
-            } catch {}
-          }
-          return _origWrite(name, params);
-        };
-        bot.once('end', () => { try { bot._client.write = _origWrite; } catch {} });
-      }
-
-      // ── 5. Плавные повороты головы ───────────────────────────────────
+      // ── Плавные повороты головы ───────────────────────────────────
       // Мгновенный поворот на 180° — детектируется любым анти-читом.
       // Lerp по 25°/тик = максимум быстрого живого игрока.
       {
