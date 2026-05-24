@@ -45,6 +45,14 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
 
+  // F12 перехватываем через before-input-event (работает даже когда DevTools активны)
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.type === "keyDown" && input.key === "F12" && !input.control && !input.alt && !input.shift) {
+      event.preventDefault();
+      toggleOverlay();
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });

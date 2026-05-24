@@ -6,154 +6,208 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: rgba(5, 7, 15, 0.88);
+      background: rgba(5, 7, 15, 0.90);
       color: #c8d8f0;
       font-family: 'Segoe UI', system-ui, sans-serif;
       font-size: 13px;
       user-select: none;
-      -webkit-app-region: drag;
       border-radius: 12px;
       overflow: hidden;
-      width: 260px;
+      width: 270px;
     }
     .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px 6px;
-      background: rgba(255,255,255,0.05);
-      border-bottom: 1px solid rgba(255,255,255,0.08);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px 7px;
+      background: rgba(255,255,255,0.06);
+      border-bottom: 1px solid rgba(255,255,255,0.09);
+      -webkit-app-region: drag;
+      cursor: grab;
     }
-    .header-title { font-size: 12px; font-weight: 600; color: #7eb8ff; }
+    .header-title { font-size: 12px; font-weight: 700; color: #7eb8ff; letter-spacing: 0.3px; }
+    .header-hint  { font-size: 10px; color: #445; }
     .header-close {
-      -webkit-app-region: no-drag;
-      cursor: pointer;
-      font-size: 16px;
-      color: #888;
-      background: none;
-      border: none;
-      line-height: 1;
-      padding: 0 2px;
+      -webkit-app-region: no-drag; cursor: pointer;
+      font-size: 16px; color: #666; background: none; border: none; line-height: 1; padding: 0 2px;
     }
     .header-close:hover { color: #ff6b6b; }
-    .body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+    .body { padding: 9px 12px; display: flex; flex-direction: column; gap: 7px; }
+
+    /* Bot status strip */
     .status-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 8px;
+      display: flex; align-items: center; gap: 7px;
+      padding: 5px 8px;
       background: rgba(255,255,255,0.04);
-      border-radius: 6px;
-      font-size: 11px;
+      border-radius: 7px;
     }
-    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #555; flex-shrink: 0; }
-    .status-dot.online { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #444; flex-shrink: 0; transition: background .3s; }
+    .status-dot.online  { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
     .status-dot.offline { background: #f87171; }
-    .status-name { flex: 1; color: #9ab; font-size: 11px; }
-    .status-hp { color: #f97316; font-weight: 600; }
+    .status-name { flex: 1; color: #89b; font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .status-hp   { color: #f97316; font-weight: 700; font-size: 11px; }
 
-    .section-label { font-size: 10px; color: #556; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: -2px; }
-
+    .section-label {
+      font-size: 10px; color: #445; text-transform: uppercase;
+      letter-spacing: 0.6px; margin-bottom: -2px;
+    }
     .row { display: flex; gap: 6px; }
-    select, input {
+
+    select, input[type="number"] {
       -webkit-app-region: no-drag;
       background: rgba(255,255,255,0.07);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 6px;
-      color: #c8d8f0;
-      font-size: 12px;
-      padding: 4px 8px;
-      outline: none;
-      width: 100%;
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 6px; color: #c8d8f0; font-size: 12px;
+      padding: 4px 8px; outline: none; width: 100%;
     }
-    select:focus, input:focus { border-color: #4d9fef; }
+    select:focus, input[type="number"]:focus { border-color: #4d9fef; }
     select option { background: #101828; }
 
     button {
-      -webkit-app-region: no-drag;
-      cursor: pointer;
-      border: none;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 500;
-      padding: 5px 10px;
-      transition: background 0.15s, opacity 0.15s;
+      -webkit-app-region: no-drag; cursor: pointer;
+      border: none; border-radius: 6px; font-size: 12px; font-weight: 500;
+      padding: 5px 10px; transition: opacity 0.12s;
     }
-    button:hover { opacity: 0.85; }
-    button:active { opacity: 0.7; }
-    .btn-primary   { background: #2563eb; color: #fff; }
-    .btn-danger    { background: #dc2626; color: #fff; }
-    .btn-success   { background: #16a34a; color: #fff; }
-    .btn-warn      { background: #d97706; color: #fff; }
-    .btn-neutral   { background: rgba(255,255,255,0.1); color: #cde; }
-    .btn-full      { width: 100%; }
-    .btn-half      { flex: 1; }
+    button:hover  { opacity: 0.80; }
+    button:active { opacity: 0.60; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-danger  { background: #dc2626; color: #fff; }
+    .btn-success { background: #16a34a; color: #fff; }
+    .btn-warn    { background: #d97706; color: #fff; }
+    .btn-neutral { background: rgba(255,255,255,0.10); color: #cde; }
+    .btn-half    { flex: 1; }
+    .btn-full    { width: 100%; }
 
+    /* Keybind table */
+    .keybind-table { display: flex; flex-direction: column; gap: 4px; }
+    .kb-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 3px 7px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 5px;
+    }
+    .kb-label { font-size: 11px; color: #9ab; flex: 1; }
+    .kb-key {
+      -webkit-app-region: no-drag;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 4px; padding: 1px 8px; font-size: 11px;
+      color: #c8d8f0; cursor: pointer; min-width: 50px; text-align: center;
+      transition: background .15s;
+    }
+    .kb-key:hover   { background: rgba(77,159,239,0.25); border-color: #4d9fef; }
+    .kb-key.waiting { background: rgba(255,200,0,0.15);  border-color: #fbbf24; color: #fbbf24; }
+
+    /* Notification */
     .notification {
-      background: rgba(239, 68, 68, 0.18);
-      border: 1px solid rgba(239, 68, 68, 0.4);
-      border-radius: 8px;
-      padding: 6px 10px;
-      font-size: 11px;
-      color: #fca5a5;
-      display: none;
+      background: rgba(239, 68, 68, 0.18); border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 7px; padding: 6px 10px; font-size: 11px; color: #fca5a5; display: none;
     }
     .notification.show { display: block; }
 
+    /* Log */
     .log-box {
-      background: rgba(0,0,0,0.3);
-      border-radius: 6px;
-      padding: 5px 8px;
-      font-size: 10px;
-      color: #778;
-      min-height: 30px;
-      max-height: 60px;
-      overflow: hidden;
-      line-height: 1.5;
+      background: rgba(0,0,0,0.3); border-radius: 6px; padding: 4px 8px;
+      font-size: 10px; color: #668; min-height: 22px; max-height: 44px;
+      overflow: hidden; line-height: 1.5;
     }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 4px; }
+    .tab {
+      -webkit-app-region: no-drag; cursor: pointer;
+      flex: 1; padding: 4px 0; text-align: center; font-size: 11px; font-weight: 500;
+      color: #557; border-radius: 5px; background: rgba(255,255,255,0.04);
+      border: 1px solid transparent; transition: all .15s;
+    }
+    .tab.active { color: #7eb8ff; background: rgba(37,99,235,0.15); border-color: rgba(37,99,235,0.3); }
+    .panel { display: none; flex-direction: column; gap: 7px; }
+    .panel.active { display: flex; }
   </style>
 </head>
 <body>
   <div class="header">
-    <span class="header-title">🟦 MC Bot Overlay</span>
+    <span class="header-title">🟦 MC Bot</span>
+    <span class="header-hint">F12 — скрыть</span>
     <button class="header-close" id="closeBtn">✕</button>
   </div>
   <div class="body">
+
+    <!-- Bot status -->
     <div class="status-row">
       <div class="status-dot" id="statusDot"></div>
       <span class="status-name" id="statusName">Нет бота</span>
-      <span class="status-hp" id="statusHP"></span>
+      <span class="status-hp"  id="statusHP"></span>
     </div>
 
+    <!-- Death notification -->
     <div id="deathNotif" class="notification">💀 Бот умер!</div>
 
-    <div class="section-label">Ферма деревьев</div>
-    <div class="row">
-      <select id="treeType">
-        <option value="oak">Дуб</option>
-        <option value="birch">Берёза</option>
-        <option value="spruce">Ель</option>
-        <option value="jungle">Джунгли</option>
-        <option value="acacia">Акация</option>
-        <option value="dark_oak">Тёмный дуб</option>
-      </select>
-      <input type="number" id="treeRadius" value="16" min="4" max="64" style="width:60px" placeholder="R" />
-    </div>
-    <div class="row">
-      <button class="btn-success btn-half" id="startFarm">▶ Ферма</button>
-      <button class="btn-danger btn-half" id="stopTask">■ Стоп</button>
+    <!-- Tabs -->
+    <div class="tabs">
+      <div class="tab active" data-tab="control">Управление</div>
+      <div class="tab" data-tab="keybinds">Бинды</div>
     </div>
 
-    <div class="section-label">Режим анархии</div>
-    <div class="row">
-      <button class="btn-warn btn-half" id="startAnarchy">⚡ Анархия ON</button>
-      <button class="btn-neutral btn-half" id="stopAnarchy">⊘ OFF</button>
+    <!-- Panel: Control -->
+    <div class="panel active" id="panel-control">
+      <div class="section-label">Ферма деревьев</div>
+      <div class="row">
+        <select id="treeType">
+          <option value="oak">Дуб</option>
+          <option value="birch">Берёза</option>
+          <option value="spruce">Ель</option>
+          <option value="jungle">Джунгли</option>
+          <option value="acacia">Акация</option>
+          <option value="dark_oak">Тёмный дуб</option>
+        </select>
+        <input type="number" id="treeRadius" value="16" min="4" max="64" style="width:58px" title="Радиус" />
+      </div>
+      <div class="row">
+        <button class="btn-success btn-half" id="startFarm" title="Запустить ферму деревьев">▶ Ферма</button>
+        <button class="btn-danger  btn-half" id="stopTask"  title="Остановить текущую задачу">■ Стоп</button>
+      </div>
+
+      <div class="section-label">Анархия</div>
+      <div class="row">
+        <button class="btn-warn    btn-half" id="startAnarchy"  title="Включить режим анархии">⚡ ON</button>
+        <button class="btn-neutral btn-half" id="stopAnarchy"   title="Выключить анархию">⊘ OFF</button>
+      </div>
+
+      <div class="section-label">Бот</div>
+      <div class="row">
+        <button class="btn-primary btn-half" id="connectBot"    title="Подключить бота к серверу">🔗 Connect</button>
+        <button class="btn-danger  btn-half" id="disconnectBot" title="Отключить бота от сервера">✕ DC</button>
+      </div>
     </div>
 
-    <div class="section-label">Управление</div>
-    <div class="row">
-      <button class="btn-primary btn-half" id="connectBot">🔗 Подключить</button>
-      <button class="btn-danger btn-half" id="disconnectBot">✕ Откл.</button>
+    <!-- Panel: Keybinds -->
+    <div class="panel" id="panel-keybinds">
+      <div class="section-label">Клавиши быстрого доступа</div>
+      <div class="keybind-table">
+        <div class="kb-row">
+          <span class="kb-label">▶ Ферма деревьев</span>
+          <div class="kb-key" data-action="startFarm" id="kb-startFarm">—</div>
+        </div>
+        <div class="kb-row">
+          <span class="kb-label">■ Стоп задачу</span>
+          <div class="kb-key" data-action="stopTask" id="kb-stopTask">—</div>
+        </div>
+        <div class="kb-row">
+          <span class="kb-label">⚡ Анархия ON</span>
+          <div class="kb-key" data-action="startAnarchy" id="kb-startAnarchy">—</div>
+        </div>
+        <div class="kb-row">
+          <span class="kb-label">⊘ Анархия OFF</span>
+          <div class="kb-key" data-action="stopAnarchy" id="kb-stopAnarchy">—</div>
+        </div>
+        <div class="kb-row">
+          <span class="kb-label">🔗 Connect Bot</span>
+          <div class="kb-key" data-action="connectBot" id="kb-connectBot">—</div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:#445;text-align:center;margin-top:2px;">
+        Кликни на кнопку → нажми нужную клавишу
+      </div>
     </div>
 
     <div class="log-box" id="logBox">—</div>
@@ -161,79 +215,139 @@
 
   <script>
     const api = window.overlayAPI;
-
     let activeBotId = null;
-    let statsInterval = null;
+
+    // ── Keybinds ────────────────────────────────────────────────────
+    const STORAGE_KEY = "mc-bot-overlay-keybinds";
+    let keybinds = {};
+    try { keybinds = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); } catch {}
+
+    let waitingFor = null; // action name we're waiting a key for
+
+    function saveKeybinds() { localStorage.setItem(STORAGE_KEY, JSON.stringify(keybinds)); }
+    function renderKeybinds() {
+      for (const [action, key] of Object.entries(keybinds)) {
+        const el = document.getElementById("kb-" + action);
+        if (el) el.textContent = key || "—";
+      }
+    }
+    renderKeybinds();
+
+    document.querySelectorAll(".kb-key").forEach(el => {
+      el.addEventListener("click", () => {
+        if (waitingFor) {
+          document.getElementById("kb-" + waitingFor)?.classList.remove("waiting");
+        }
+        waitingFor = el.dataset.action;
+        el.classList.add("waiting");
+        el.textContent = "…";
+      });
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (!waitingFor) {
+        // Check keybind triggers
+        for (const [action, key] of Object.entries(keybinds)) {
+          if (key && e.key === key) {
+            e.preventDefault();
+            triggerAction(action);
+          }
+        }
+        return;
+      }
+
+      e.preventDefault();
+      const el = document.getElementById("kb-" + waitingFor);
+      if (e.key === "Escape") {
+        // Cancel
+        el?.classList.remove("waiting");
+        el.textContent = keybinds[waitingFor] || "—";
+        waitingFor = null;
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        // Clear binding
+        delete keybinds[waitingFor];
+        saveKeybinds();
+        el?.classList.remove("waiting");
+        el.textContent = "—";
+        waitingFor = null;
+        return;
+      }
+      keybinds[waitingFor] = e.key;
+      saveKeybinds();
+      el?.classList.remove("waiting");
+      el.textContent = e.key;
+      waitingFor = null;
+    });
+
+    // ── Actions ─────────────────────────────────────────────────────
+    async function triggerAction(action) {
+      switch (action) {
+        case "startFarm":
+          if (!activeBotId) { log("Нет бота"); break; }
+          await api.runTask(activeBotId, "farm_trees", {
+            treeType: document.getElementById("treeType").value,
+            radius: parseInt(document.getElementById("treeRadius").value) || 16,
+          });
+          log("🌲 Ферма запущена"); break;
+        case "stopTask":
+          if (activeBotId) { await api.stopTask(activeBotId); log("⏹ Стоп"); } break;
+        case "startAnarchy":
+          if (activeBotId) { await api.startAnarchy(activeBotId, {}); log("⚡ Анархия ON"); } break;
+        case "stopAnarchy":
+          if (activeBotId) { await api.stopAnarchy(activeBotId); log("⊘ Анархия OFF"); } break;
+        case "connectBot":
+          if (activeBotId) { await api.connect(activeBotId); log("🔗 Подключение..."); } break;
+        case "disconnectBot":
+          if (activeBotId) { await api.disconnect(activeBotId); log("✕ Отключён"); } break;
+      }
+    }
+
+    // ── Buttons ─────────────────────────────────────────────────────
+    document.getElementById("closeBtn").onclick     = () => api.closeOverlay();
+    document.getElementById("startFarm").onclick    = () => triggerAction("startFarm");
+    document.getElementById("stopTask").onclick     = () => triggerAction("stopTask");
+    document.getElementById("startAnarchy").onclick = () => triggerAction("startAnarchy");
+    document.getElementById("stopAnarchy").onclick  = () => triggerAction("stopAnarchy");
+    document.getElementById("connectBot").onclick   = () => triggerAction("connectBot");
+    document.getElementById("disconnectBot").onclick= () => triggerAction("disconnectBot");
+
+    // ── Tabs ────────────────────────────────────────────────────────
+    document.querySelectorAll(".tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+        document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+        tab.classList.add("active");
+        document.getElementById("panel-" + tab.dataset.tab)?.classList.add("active");
+      });
+    });
+
+    // ── Status refresh ───────────────────────────────────────────────
+    function log(msg) { document.getElementById("logBox").textContent = msg; }
 
     async function refreshBots() {
       try {
         const bots = await api.getAll();
         const online = bots.find(b => b.status === "online") || bots[0];
-        if (!online) { setStatus(null); return; }
+        if (!online) {
+          document.getElementById("statusDot").className = "status-dot offline";
+          document.getElementById("statusName").textContent = "Нет бота";
+          document.getElementById("statusHP").textContent = "";
+          activeBotId = null; return;
+        }
         activeBotId = online.id;
         const dot = document.getElementById("statusDot");
         dot.className = "status-dot " + (online.status === "online" ? "online" : "offline");
-        document.getElementById("statusName").textContent = (online.config.nick || "Bot") + "@" + (online.config.host || "?");
+        document.getElementById("statusName").textContent =
+          (online.config?.nick || "Bot") + "@" + (online.config?.host || "?");
         if (online.stats) {
           document.getElementById("statusHP").textContent = "❤" + Math.round(online.stats.health || 0);
         }
       } catch {}
     }
 
-    function setStatus(bot) {
-      if (!bot) {
-        document.getElementById("statusDot").className = "status-dot offline";
-        document.getElementById("statusName").textContent = "Нет бота";
-        document.getElementById("statusHP").textContent = "";
-      }
-    }
-
-    function log(msg) {
-      document.getElementById("logBox").textContent = msg;
-    }
-
-    // Кнопки
-    document.getElementById("closeBtn").onclick = () => api.closeOverlay();
-
-    document.getElementById("startFarm").onclick = async () => {
-      if (!activeBotId) { log("Нет активного бота"); return; }
-      const type = document.getElementById("treeType").value;
-      const radius = parseInt(document.getElementById("treeRadius").value) || 16;
-      await api.runTask(activeBotId, "farm_trees", { treeType: type, radius });
-      log("🌲 Ферма " + type + " запущена");
-    };
-
-    document.getElementById("stopTask").onclick = async () => {
-      if (!activeBotId) return;
-      await api.stopTask(activeBotId);
-      log("⏹ Задача остановлена");
-    };
-
-    document.getElementById("startAnarchy").onclick = async () => {
-      if (!activeBotId) { log("Нет активного бота"); return; }
-      await api.startAnarchy(activeBotId, {});
-      log("⚡ Анархия включена");
-    };
-
-    document.getElementById("stopAnarchy").onclick = async () => {
-      if (!activeBotId) return;
-      await api.stopAnarchy(activeBotId);
-      log("⊘ Анархия выключена");
-    };
-
-    document.getElementById("connectBot").onclick = async () => {
-      if (!activeBotId) { log("Нет бота"); return; }
-      await api.connect(activeBotId);
-      log("🔗 Подключение...");
-    };
-
-    document.getElementById("disconnectBot").onclick = async () => {
-      if (!activeBotId) return;
-      await api.disconnect(activeBotId);
-      log("✕ Отключён");
-    };
-
-    // Уведомление о смерти
+    // ── Death event ─────────────────────────────────────────────────
     api.onDeath(() => {
       const n = document.getElementById("deathNotif");
       n.classList.add("show");
@@ -241,7 +355,6 @@
       setTimeout(() => n.classList.remove("show"), 8000);
     });
 
-    // Обновление статуса каждые 3 сек
     refreshBots();
     setInterval(refreshBots, 3000);
   </script>

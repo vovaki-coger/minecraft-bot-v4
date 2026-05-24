@@ -167,17 +167,35 @@ class BotManager {
   }
 
   _buildOptions(config) {
+    // Версия: "auto"/пусто → undefined (mineflayer сам определит при handshake)
+    const rawVer = (config.version || "").toString().trim();
+    const version = (!rawVer || rawVer === "auto") ? undefined : rawVer;
+
     const opts = {
-      host: config.host,
-      port: parseInt(config.port) || 25565,
+      host:    config.host,
+      port:    parseInt(config.port) || 25565,
       username: config.nick,
-      version: config.version || "1.20.1",
-      auth: config.authType === "microsoft" ? "microsoft" : "offline",
+      auth:    config.authType === "microsoft" ? "microsoft" : "offline",
       hideErrors: false,
       checkTimeoutInterval: 60000,
+
+      // ── Совместимость с серверами 1.19+ (chat signing) ───────────────
+      // Без этого флага mineflayer отправляет неподписанные chat-пакеты,
+      // и серверы с enforce-secure-profile=true кикают бота.
+      enableChatSigning: false,
+
+      // ── Не блокировать if server sends a "login" packet ──────────────
+      // Некоторые серверы (BungeeCord/Velocity) шлют login до spawn
+      respawnOnDeath: false,
     };
+
+    if (version) opts.version = version;
+
     const proxy = config.proxy || this.configManager.get("globalProxy", "");
     if (proxy) opts.agent = this._proxyAgent(proxy);
+
+    log.info("[BotManager] connecting to " + opts.host + ":" + opts.port +
+      " ver=" + (version || "auto") + " auth=" + opts.auth);
     return opts;
   }
 
