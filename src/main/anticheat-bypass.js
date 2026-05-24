@@ -1,21 +1,14 @@
 /**
- * AnticheatBypass — обход античита для Mineflayer-ботов.
+ * AnticheatBypass v2 — легитимное поведение бота.
  *
- * Поддерживаемые античиты:
- *  - GrimAC (открытый, строгая детерминированная физика)
- *  - Vulcan (премиум, строгая таймер-проверка)
- *  - Intave (премиум, продвинутая эвристика)
- *  - Matrix (платный, анализ движений)
- *  - Spartan (платный, анализ пакетов)
- *
- * Целевые серверы: ReallyWorld, Spookytime, Funtime
- *
- * ВАЖНО о GrimAC/Vulcan:
- *  - Эти античиты используют детерминированную физику — они сами симулируют
- *    где должен быть игрок каждый тик и сравнивают с отправленными координатами.
- *  - НЕЛЬЗЯ добавлять X/Z-джиттер к position-пакетам — это сразу VL Speed/Position.
- *  - НЕЛЬЗЯ добавлять таймерный джиттер — GrimAC/Vulcan считают пакеты в секунду.
- *  - Можно добавлять микро-джиттер к yaw/pitch (взгляд) — не предсказывается.
+ * Принципы:
+ *  • Все пакеты взаимодействия (dig, place, attack) предваряются взглядом на цель
+ *    и анимацией руки — ровно как это делает vanilla-клиент.
+ *  • Движение — только ходьба (allowSprinting=false уже выставлен в bot-manager).
+ *    Position-пакеты НЕ трогаем — GrimAC симулирует физику детерминированно.
+ *  • Idle: небольшие случайные повороты головы пока бот стоит — живой игрок
+ *    никогда не стоит как статуя.
+ *  • Brand — "vanilla", settings-пакет с рандомными locale/view.
  */
 
 const log = require("electron-log");
@@ -37,70 +30,7 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// ── Проверка дистанции до блока ──────────────────────────────────────────────
-
-function isInReach(bot, blockPosition, maxReach) {
-  if (!bot.entity || !blockPosition) return false;
-  const dist = bot.entity.position.distanceTo(blockPosition);
-  return dist <= (maxReach || MAX_REACH);
-}
-
-// ── Безопасное копание с взглядом на блок ────────────────────────────────────
-//
-// Перед копанием бот:
-//   1. Смотрит на центр блока (как человек)
-//   2. Проверяет прямую видимость (line of sight) через bot.canSeeBlock
-//   3. Копает с задержкой между action-пакетами
-//
-async function safeDig(bot, block, opts) {
-  if (!block || !bot.entity) return false;
-  opts = opts || {};
-  const reach = opts.reach || MAX_REACH;
-
-  // Берём актуальный блок по координатам (мог смениться пока шли к нему)
-  const refreshed = bot.blockAt(block.position);
-  if (!refreshed || refreshed.name === "air" || refreshed.name === "cave_air") return false;
-  if (!isInReach(bot, refreshed.position, reach)) {
-    log.debug("[AnticheatBypass] safeDig: out of reach (" +
-      bot.entity.position.distanceTo(refreshed.position).toFixed(2) + " блоков)");
-    return false;
-  }
-
-  // ── Смотрим на центр блока перед копанием ──
-  // Человек всегда смотрит на блок который копает.
-  // Без lookAt бот отправляет dig-пакет НЕ глядя на блок → античит/сервер
-  // регистрирует "hit air" и блок не разрушается.
-  const center = refreshed.position.offset(0.5, 0.5, 0.5);
-  await smoothLookAt(bot, center, false);
-  await sleep(randInt(55, 90));
-
-  // ── Проверяем видимость (line of sight) ──
-  // Если блок за другим блоком — не копаем, идём ближе.
-  try {
-    if (typeof bot.canSeeBlock === "function" && !bot.canSeeBlock(refreshed)) {
-      log.debug("[AnticheatBypass] safeDig: блок не виден (нет LOS)");
-      return false;
-    }
-  } catch {}
-
-  // ── Машем рукой (arm_animation) — большинство античитов требуют этот пакет ──
-  // GrimAC/Intave проверяют: перед разрушением должен быть sent arm_animation.
-  // Без него — "hitting air" (сервер отбрасывает пакет).
-  try { bot.swingArm(); } catch {}
-  await sleep(randInt(30, 60));
-
-  // ── Копаем ──
-  try {
-    await bot.dig(refreshed);
-    await sleep(randInt(50, 120));
-    return true;
-  } catch (err) {
-    log.debug("[AnticheatBypass] safeDig error:", err.message);
-    return false;
-  }
-}
-
-// ── Плавный поворот головы ───────────────────────────────────────────────────
+// ── Плавный поворот головы (микро-джиттер взгляда) ───────────────────────────
 
 async function smoothLookAt(bot, targetPos, force) {
   if (!bot.entity || !targetPos) return;
@@ -111,20 +41,26 @@ async function smoothLookAt(bot, targetPos, force) {
   const dz = targetPos.z - eyePos.z;
   const targetYaw   = Math.atan2(-dx, dz);
   const targetPitch = Math.atan2(-dy, Math.sqrt(dx * dx + dz * dz));
-  const startYaw   = bot.entity.yaw;
-  const startPitch = bot.entity.pitch;
+  const startYaw    = bot.entity.yaw;
+  const startPitch  = bot.entity.pitch;
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    // Микро-джиттер взгляда (≤ 0.009 рад ≈ 0.5°) — GrimAC не предсказывает взгляд
-    let yaw   = startYaw   + (targetYaw   - startYaw)   * t + randFloat(-0.009, 0.009);
-    let pitch = startPitch + (targetPitch - startPitch) * t + randFloat(-0.009, 0.009);
+    let yaw   = startYaw   + (targetYaw   - startYaw)   * t + randFloat(-0.008, 0.008);
+    let pitch = startPitch + (targetPitch - startPitch) * t + randFloat(-0.006, 0.006);
     pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
     await bot.look(yaw, pitch, force || false).catch(() => {});
-    await sleep(randInt(45, 55));
+    await sleep(randInt(42, 58));
   }
 }
 
-// ── Случайная точка внутри хитбокса моба ────────────────────────────────────
+// ── Проверка дальности до блока ──────────────────────────────────────────────
+
+function isInReach(bot, blockPosition, maxReach) {
+  if (!bot.entity || !blockPosition) return false;
+  return bot.entity.position.distanceTo(blockPosition) <= (maxReach || MAX_REACH);
+}
+
+// ── Случайная точка в хитбоксе моба ─────────────────────────────────────────
 
 function randomHitboxPoint(entity) {
   if (!entity || !entity.position) return null;
@@ -132,15 +68,136 @@ function randomHitboxPoint(entity) {
   return entity.position.offset(randFloat(-0.1, 0.1), h, randFloat(-0.1, 0.1));
 }
 
-// ── Патч пакетов движения (только look-джиттер, без position-джиттера) ────────
+// ── Выбор правильной грани блока ─────────────────────────────────────────────
 //
-// ВАЖНО: для GrimAC и Vulcan НЕ добавляем:
-//   • X/Z координатный джиттер — ломает детерминированную физику GrimAC
-//   • Таймерный джиттер (setTimeout) — GrimAC/Vulcan считают пакетов/сек
+// Vanilla-клиент отправляет грань, на которую смотрит игрок.
+// GrimAC проверяет, что грань в dig-пакете совпадает с направлением взгляда.
 //
-// Добавляем только:
-//   • Микро-джиттер yaw/pitch в look-пакетах (≤ 0.003 рад, не предсказывается)
+function getBlockFace(bot, block) {
+  if (!bot.entity || !block) return 1; // top by default
+  const eye = bot.entity.position.offset(0, 1.62, 0);
+  const center = block.position.offset(0.5, 0.5, 0.5);
+  const dx = eye.x - center.x;
+  const dy = eye.y - center.y;
+  const dz = eye.z - center.z;
+  const adx = Math.abs(dx), ady = Math.abs(dy), adz = Math.abs(dz);
+  if (ady >= adx && ady >= adz) return dy > 0 ? 1 : 0; // top / bottom
+  if (adx >= adz) return dx > 0 ? 5 : 4;               // east / west
+  return dz > 0 ? 3 : 2;                               // south / north
+}
+
+// ── ПАТЧ dig + placeBlock ─────────────────────────────────────────────────────
 //
+// Vanilla-клиент ВСЕГДА:
+//   1. Смотрит на блок/поверхность (look-пакеты)
+//   2. Посылает arm_animation (swing main hand) ДО dig/place
+//   3. Для многотиковой добычи: посылает arm_animation каждый тик
+//
+// Mineflayer без патча: не посылает look и не посылает arm_animation →
+// GrimAC/Vulcan/Intave отбрасывают пакет как "hit air".
+//
+function patchDigAndPlace(bot) {
+  // ── Патч bot.dig ──────────────────────────────────────────────────────────
+  const origDig = bot.dig.bind(bot);
+  bot.dig = async function patchedDig(block, _forceLook, digFace) {
+    if (!block || !bot.entity) return origDig(block, _forceLook, digFace);
+
+    // Берём актуальный блок по координатам
+    const fresh = bot.blockAt(block.position);
+    if (!fresh || fresh.name === "air" || fresh.name === "cave_air") return;
+
+    // 1. Смотрим на правильную грань блока
+    const faceNormal = [
+      { x: 0, y: -1, z: 0 }, // 0 bottom
+      { x: 0, y:  1, z: 0 }, // 1 top    ← чаще всего
+      { x: 0, y:  0, z:-1 }, // 2 north
+      { x: 0, y:  0, z: 1 }, // 3 south
+      { x:-1, y:  0, z: 0 }, // 4 west
+      { x: 1, y:  0, z: 0 }, // 5 east
+    ];
+    const face = getBlockFace(bot, fresh);
+    const n = faceNormal[face];
+    const aimPoint = fresh.position.offset(
+      0.5 + n.x * 0.5,
+      0.5 + n.y * 0.5,
+      0.5 + n.z * 0.5
+    );
+    try { await smoothLookAt(bot, aimPoint, false); } catch {}
+    await sleep(randInt(40, 75));
+
+    // 2. arm_animation до начала копания
+    try { bot.swingArm("right"); } catch {}
+    await sleep(randInt(28, 52));
+
+    // 3. Копаем — параллельно посылаем arm_animation каждый тик
+    let stillDigging = true;
+    const animLoop = (async () => {
+      while (stillDigging) {
+        await sleep(randInt(52, 68)); // ≈ 1 тик = 50мс
+        if (stillDigging && bot.entity) {
+          try { bot.swingArm("right"); } catch {}
+        }
+      }
+    })();
+
+    try {
+      await origDig(fresh, false, digFace != null ? digFace : face);
+    } catch (err) {
+      log.debug("[AntiCheat dig]", err.message);
+      throw err;
+    } finally {
+      stillDigging = false;
+      await animLoop;
+    }
+  };
+
+  // ── Патч bot.placeBlock ───────────────────────────────────────────────────
+  const origPlace = bot.placeBlock.bind(bot);
+  bot.placeBlock = async function patchedPlace(referenceBlock, faceVector, options) {
+    if (!bot.entity) return origPlace(referenceBlock, faceVector, options);
+
+    // 1. Смотрим на поверхность куда ставим блок
+    const target = referenceBlock.position.offset(
+      0.5 + (faceVector.x || 0) * 0.5,
+      0.5 + (faceVector.y || 0) * 0.5,
+      0.5 + (faceVector.z || 0) * 0.5
+    );
+    try { await smoothLookAt(bot, target, false); } catch {}
+    await sleep(randInt(50, 90));
+
+    // 2. arm_animation перед размещением
+    try { bot.swingArm("right"); } catch {}
+    await sleep(randInt(28, 52));
+
+    // 3. Ставим блок
+    try {
+      return await origPlace(referenceBlock, faceVector, options);
+    } catch (err) {
+      log.debug("[AntiCheat place]", err.message);
+      throw err;
+    }
+  };
+
+  // ── Патч bot.attack ───────────────────────────────────────────────────────
+  // Vanilla: смотрит на хитбокс → arm_animation → attack
+  const origAttack = bot.attack.bind(bot);
+  bot.attack = async function patchedAttack(entity) {
+    if (!entity || !bot.entity) return origAttack(entity);
+    const pt = randomHitboxPoint(entity);
+    if (pt) {
+      try { await smoothLookAt(bot, pt, false); } catch {}
+      await sleep(randInt(30, 60));
+    }
+    try { bot.swingArm("right"); } catch {}
+    await sleep(randInt(20, 40));
+    return origAttack(entity);
+  };
+
+  log.info("[AnticheatBypass] Патч dig/place/attack применён");
+}
+
+// ── Патч пакетов движения (look-джиттер, без позиционного джиттера) ──────────
+
 function patchMovementPackets(bot) {
   try {
     const client = bot._client;
@@ -148,37 +205,31 @@ function patchMovementPackets(bot) {
     const origWrite = client.write.bind(client);
 
     client.write = function(name, data) {
-      // Только look-пакеты получают микро-джиттер взгляда
+      // Только look-пакеты: минимальный джиттер взгляда (≤ 0.003 рад)
       // position/position_look НЕ трогаем — GrimAC предсказывает позицию точно
-      if (name === "look") {
-        if (data.yaw !== undefined) {
-          data = {
-            ...data,
-            yaw:   data.yaw   + randFloat(-0.003, 0.003),
-            pitch: data.pitch + randFloat(-0.002, 0.002),
-          };
-        }
+      if (name === "look" && data.yaw !== undefined) {
+        data = {
+          ...data,
+          yaw:   data.yaw   + randFloat(-0.003, 0.003),
+          pitch: data.pitch + randFloat(-0.002, 0.002),
+        };
       }
-      origWrite(name, data);
+      return origWrite(name, data);
     };
 
-    log.info("[AnticheatBypass] Патч пакетов движения применён (GrimAC-safe mode)");
+    log.info("[AnticheatBypass] Патч пакетов движения применён");
   } catch (err) {
     log.warn("[AnticheatBypass] patchMovementPackets error:", err.message);
   }
 }
 
-// ── Патч спринта — задержка 1–2 тика ────────────────────────────────────────
-//
-// Vanilla: игрок нажимает Ctrl, спринт включается через 1-2 тика.
-// Vulcan/GrimAC проверяют что спринт не включается мгновенно при изменении velocity.
-//
+// ── Патч задержки спринта ─────────────────────────────────────────────────────
+
 function patchSprintDelay(bot) {
   try {
     const origSetControl = bot.setControlState.bind(bot);
     bot.setControlState = function(control, state) {
       if (control === "sprint" && state === true) {
-        // 1–2 тика (50–100мс) — имитация нажатия Ctrl у человека
         setTimeout(() => origSetControl(control, state), randInt(50, 100));
         return;
       }
@@ -190,78 +241,108 @@ function patchSprintDelay(bot) {
   }
 }
 
-// ── Обработчик rubber-band (откат позиции от сервера) ─────────────────────────
+// ── Idle-поведение: небольшие повороты головы пока бот стоит ─────────────────
 //
-// GrimAC/Vulcan: после forcedMove нужно немедленно остановить движение
-// и подтвердить новую позицию прежде чем двигаться дальше.
+// Настоящий игрок никогда не стоит абсолютно неподвижно.
+// Anticheats как Intave/Matrix анализируют движение взгляда — полная неподвижность
+// является одним из сигналов бота.
 //
+function setupIdleBehavior(bot) {
+  let idleTimer = null;
+
+  function scheduleIdle() {
+    const delay = randInt(4000, 12000);
+    idleTimer = setTimeout(async () => {
+      if (!bot.entity) { scheduleIdle(); return; }
+
+      // Небольшой случайный поворот (+/- до 25°) — не резкий, плавный
+      try {
+        const curYaw   = bot.entity.yaw;
+        const curPitch = bot.entity.pitch;
+        const newYaw   = curYaw   + randFloat(-0.44, 0.44);
+        const newPitch = Math.max(-1.4, Math.min(0.9, curPitch + randFloat(-0.25, 0.25)));
+        const steps = randInt(2, 4);
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          await bot.look(
+            curYaw   + (newYaw   - curYaw)   * t + randFloat(-0.004, 0.004),
+            curPitch + (newPitch - curPitch) * t + randFloat(-0.003, 0.003),
+            false
+          ).catch(() => {});
+          await sleep(randInt(55, 80));
+        }
+      } catch {}
+
+      // Иногда (15% шанс) — случайный swing рукой (типа игрок кликнул мышкой)
+      if (Math.random() < 0.15 && bot.entity) {
+        await sleep(randInt(200, 800));
+        try { bot.swingArm("right"); } catch {}
+      }
+
+      scheduleIdle();
+    }, delay);
+  }
+
+  scheduleIdle();
+
+  // Очищаем таймер при отключении
+  bot.once("end", () => { if (idleTimer) clearTimeout(idleTimer); });
+
+  log.info("[AnticheatBypass] Idle-поведение активировано");
+}
+
+// ── Обработчик rubber-band ────────────────────────────────────────────────────
+
 function setupForcedMoveHandler(bot, instance) {
   let _forcedMoveTimer = null;
+
   bot.on("forcedMove", () => {
     try { bot.pathfinder?.stop(); } catch {}
     try { bot.clearControlStates(); } catch {}
     try { bot.setControlState("jump",   false); } catch {}
     try { bot.setControlState("sprint", false); } catch {}
 
-    instance._antiCheatCooldownUntil = Date.now() + 1200;
+    // Кулдаун 1.5с перед следующим движением
+    instance._antiCheatCooldownUntil = Date.now() + 1500;
 
     if (_forcedMoveTimer) clearTimeout(_forcedMoveTimer);
     _forcedMoveTimer = setTimeout(() => {
-      if (instance._antiCheatCooldownUntil > 0 && Date.now() < instance._antiCheatCooldownUntil) {
-        instance._antiCheatCooldownUntil = 0;
-      }
-    }, 1300);
+      instance._antiCheatCooldownUntil = 0;
+    }, 1600);
 
-    log.debug("[AnticheatBypass] forcedMove: кулдаун 1.2с");
+    log.debug("[AnticheatBypass] forcedMove: кулдаун 1.5с");
   });
 }
 
-// ── Маскировка пакетов при входе на сервер ───────────────────────────────────
-//
-// Вызывается СРАЗУ после mineflayer.createBot(), ДО _attachEvents.
-// НЕ вызывается для localhost/127.0.0.1 — локальному серверу маскировка
-// не нужна и задержка settings может мешать быстрому локальному подключению.
-//
-// Что делает:
-//   1. brand "mineflayer" → "vanilla"
-//   2. settings-пакет задерживается на 120–450 мс (снижено с 1250мс — серверы
-//      требуют settings быстро иначе кикают при загрузке мира)
-//   3. locale и viewDistance рандомизируются
-//
+// ── Маскировка пакетов при входе ─────────────────────────────────────────────
+
 function initLoginMasking(bot) {
   try {
     const client = bot._client;
-    if (!client) {
-      setTimeout(() => initLoginMasking(bot), 10);
-      return;
-    }
+    if (!client) { setTimeout(() => initLoginMasking(bot), 10); return; }
 
     const origWrite = client.write.bind(client);
-    let brandMasked    = false;
-    let settingsMasked = false;
+    let brandMasked = false, settingsMasked = false;
 
     client.write = function(name, data) {
-
-      // ── 1. Brand: "mineflayer" → "vanilla" ────────────────────────────────
+      // Brand: mineflayer → vanilla
       if (!brandMasked &&
           (name === "plugin_message" || name === "custom_payload") &&
           data?.channel === "minecraft:brand") {
         brandMasked = true;
         const brand = "vanilla";
         const buf = Buffer.allocUnsafe(1 + brand.length);
-        buf[0] = brand.length;       // varint: 1 байт для коротких строк
+        buf[0] = brand.length;
         buf.write(brand, 1, "utf8");
         log.info("[LoginMask] brand: mineflayer → vanilla");
         return origWrite(name, { ...data, data: buf });
       }
 
-      // ── 2. Settings: задержка 120–450мс + рандомизация ────────────────────
-      // Снижено с 1250мс! Некоторые серверы кикают если settings не получен
-      // в течение первых 500мс — это вызывало "загрузка начинается и прекращается".
+      // Settings: задержка 120–450мс + рандомизация (locale, viewDistance, skinParts)
       if (!settingsMasked && name === "settings") {
         settingsMasked = true;
         const delay   = randInt(120, 450);
-        const locales = ["en_US", "ru_RU", "uk_UA", "en_GB", "de_DE"];
+        const locales = ["en_US", "ru_RU", "uk_UA", "en_GB", "de_DE", "pl_PL", "fr_FR"];
         const patched = {
           ...data,
           locale:       locales[randInt(0, locales.length - 1)],
@@ -271,74 +352,90 @@ function initLoginMasking(bot) {
           skinParts:    randInt(121, 127),
           mainHand:     1,
         };
-        log.info(`[LoginMask] settings delayed ${delay}ms | locale=${patched.locale} view=${patched.viewDistance}`);
+        log.info(`[LoginMask] settings delayed ${delay}ms locale=${patched.locale} view=${patched.viewDistance}`);
         setTimeout(() => { try { origWrite(name, patched); } catch {} }, delay);
         return;
       }
 
-      origWrite(name, data);
+      return origWrite(name, data);
     };
 
     log.info("[LoginMask] Маскировка пакетов входа активирована");
   } catch (err) {
-    log.warn("[LoginMask] initLoginMasking error:", err.message);
+    log.warn("[LoginMask] error:", err.message);
+  }
+}
+
+// ── Подтверждение position-пакетов при загрузке мира ─────────────────────────
+
+function setupLoadingTerrainHandler(bot) {
+  try {
+    const client = bot._client;
+    if (!client) return;
+
+    const confirmedIds = new Set();
+    client.on("position", (packet) => {
+      if (packet.teleportId === undefined) return;
+      if (confirmedIds.has(packet.teleportId)) return;
+      confirmedIds.add(packet.teleportId);
+      try { client.write("teleport_confirm", { teleportId: packet.teleportId }); } catch {}
+      log.debug("[LoadingTerrain] teleport_confirm teleportId=" + packet.teleportId);
+    });
+
+    log.info("[AnticheatBypass] Loading terrain handler установлен");
+  } catch (err) {
+    log.warn("[AnticheatBypass] setupLoadingTerrainHandler error:", err.message);
   }
 }
 
 // ── Случайный осмотр после спавна ────────────────────────────────────────────
-//
-// 2–4 случайных поворота головы в первые 2–4 секунды.
-// Имитирует живого игрока который оглядывается при заходе на сервер.
-//
+
 async function doSpawnLookAround(bot) {
   try {
-    const turns = randInt(2, 4);
+    const turns = randInt(3, 5);
     for (let i = 0; i < turns; i++) {
-      await sleep(randInt(350, 950));
+      await sleep(randInt(250, 850));
       if (!bot.entity) return;
       await bot.look(
         randFloat(-Math.PI, Math.PI),
-        randFloat(-0.4, 0.3),
+        randFloat(-0.5, 0.35),
         false
       ).catch(() => {});
     }
   } catch {}
 }
 
-// ── Keepalive-пакеты во время загрузки мира ──────────────────────────────────
-//
-// Vanilla-клиент отвечает на keep_alive и подтверждает teleport_confirm
-// даже во время экрана "Загрузка мира".
-// Mineflayer делает это автоматически, но на некоторых серверах нужно
-// также подтвердить свою позицию быстро после получения первого position.
-//
-// Этот обработчик вешается на bot._client ДО spawn-эвента.
-//
-function setupLoadingTerrainHandler(bot) {
+// ── safeDig: копание с проверкой дальности и видимости ───────────────────────
+// (Используется таск-менеджером / внешним кодом)
+
+async function safeDig(bot, block, opts) {
+  if (!block || !bot.entity) return false;
+  opts = opts || {};
+  const reach = opts.reach || MAX_REACH;
+
+  const fresh = bot.blockAt(block.position);
+  if (!fresh || fresh.name === "air" || fresh.name === "cave_air") return false;
+  if (!isInReach(bot, fresh.position, reach)) {
+    log.debug("[AnticheatBypass] safeDig: out of reach " +
+      bot.entity.position.distanceTo(fresh.position).toFixed(2));
+    return false;
+  }
+
+  // Видимость (line of sight)
   try {
-    const client = bot._client;
-    if (!client) return;
+    if (typeof bot.canSeeBlock === "function" && !bot.canSeeBlock(fresh)) {
+      log.debug("[AnticheatBypass] safeDig: нет LOS");
+      return false;
+    }
+  } catch {}
 
-    // Vanilla клиент подтверждает КАЖДЫЙ position-пакет через teleport_confirm.
-    // Старый код использовал флаг positionConfirmed = true после первого пакета,
-    // из-за чего все последующие position-пакеты (например, при BungeeCord-трансфере
-    // на игровой под-сервер) оставались неподтверждёнными → сервер кикал бота
-    // за "phantom coordinates" / бот не мог двигаться после телепорта.
-    // Исправление: подтверждаем каждый уникальный teleportId ровно один раз.
-    const confirmedIds = new Set();
-    client.on("position", (packet) => {
-      if (packet.teleportId === undefined) return;
-      if (confirmedIds.has(packet.teleportId)) return;
-      confirmedIds.add(packet.teleportId);
-      try {
-        client.write("teleport_confirm", { teleportId: packet.teleportId });
-      } catch {}
-      log.debug("[LoadingTerrain] teleport_confirm sent, teleportId=" + packet.teleportId);
-    });
-
-    log.info("[AnticheatBypass] Loading terrain handler установлен");
+  try {
+    // bot.dig уже пропатчен и сам делает look + arm_animation
+    await bot.dig(fresh);
+    return true;
   } catch (err) {
-    log.warn("[AnticheatBypass] setupLoadingTerrainHandler error:", err.message);
+    log.debug("[AnticheatBypass] safeDig error:", err.message);
+    return false;
   }
 }
 
@@ -356,7 +453,7 @@ async function safeGoto(bot, instance, goal, timeoutMs) {
       bot.pathfinder.goto(goal),
       sleep(timeoutMs).then(() => { throw new Error("goto timeout"); }),
     ]);
-    await sleep(randInt(80, 150));
+    await sleep(randInt(80, 160));
     return true;
   } catch (err) {
     if (err.message !== "goto timeout") log.debug("[AnticheatBypass] safeGoto error:", err.message);
@@ -364,13 +461,16 @@ async function safeGoto(bot, instance, goal, timeoutMs) {
   }
 }
 
-// ── Инициализация в spawn-обработчике ────────────────────────────────────────
+// ── Главная инициализация (вызывается в spawn-обработчике) ───────────────────
 
 function initAnticheatBypass(bot, instance) {
-  patchMovementPackets(bot);
-  patchSprintDelay(bot);
-  setupForcedMoveHandler(bot, instance);
-  log.info("[AnticheatBypass] Модуль инициализирован для бота", instance.id);
+  patchDigAndPlace(bot);          // ← ГЛАВНЫЙ ФИК: look + arm_animation для dig/place/attack
+  patchMovementPackets(bot);      // look-джиттер
+  patchSprintDelay(bot);          // задержка включения спринта
+  setupForcedMoveHandler(bot, instance); // rubber-band handler
+  setupIdleBehavior(bot);         // живые движения головы в idle
+
+  log.info("[AnticheatBypass] Модуль v2 инициализирован для бота", instance.id);
 }
 
 module.exports = {

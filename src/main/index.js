@@ -64,7 +64,7 @@ function createWindow() {
     minHeight: 700,
     backgroundColor: "#05070f",
     titleBarStyle: "default",
-    title: "Призмарин Бот v4.7.0",
+    title: "Призмарин Бот v4.8.0",
     icon: path.join(__dirname, "../../assets/icon.png"),
     webPreferences: {
       nodeIntegration: false,
