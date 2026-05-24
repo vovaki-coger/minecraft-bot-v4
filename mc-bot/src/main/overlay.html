@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>MC Bot Overlay</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: rgba(5, 7, 15, 0.88);
+      color: #c8d8f0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      user-select: none;
+      -webkit-app-region: drag;
+      border-radius: 12px;
+      overflow: hidden;
+      width: 260px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px 6px;
+      background: rgba(255,255,255,0.05);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .header-title { font-size: 12px; font-weight: 600; color: #7eb8ff; }
+    .header-close {
+      -webkit-app-region: no-drag;
+      cursor: pointer;
+      font-size: 16px;
+      color: #888;
+      background: none;
+      border: none;
+      line-height: 1;
+      padding: 0 2px;
+    }
+    .header-close:hover { color: #ff6b6b; }
+    .body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 6px;
+      font-size: 11px;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #555; flex-shrink: 0; }
+    .status-dot.online { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+    .status-dot.offline { background: #f87171; }
+    .status-name { flex: 1; color: #9ab; font-size: 11px; }
+    .status-hp { color: #f97316; font-weight: 600; }
+
+    .section-label { font-size: 10px; color: #556; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: -2px; }
+
+    .row { display: flex; gap: 6px; }
+    select, input {
+      -webkit-app-region: no-drag;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      color: #c8d8f0;
+      font-size: 12px;
+      padding: 4px 8px;
+      outline: none;
+      width: 100%;
+    }
+    select:focus, input:focus { border-color: #4d9fef; }
+    select option { background: #101828; }
+
+    button {
+      -webkit-app-region: no-drag;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 10px;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+    button:active { opacity: 0.7; }
+    .btn-primary   { background: #2563eb; color: #fff; }
+    .btn-danger    { background: #dc2626; color: #fff; }
+    .btn-success   { background: #16a34a; color: #fff; }
+    .btn-warn      { background: #d97706; color: #fff; }
+    .btn-neutral   { background: rgba(255,255,255,0.1); color: #cde; }
+    .btn-full      { width: 100%; }
+    .btn-half      { flex: 1; }
+
+    .notification {
+      background: rgba(239, 68, 68, 0.18);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11px;
+      color: #fca5a5;
+      display: none;
+    }
+    .notification.show { display: block; }
+
+    .log-box {
+      background: rgba(0,0,0,0.3);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 10px;
+      color: #778;
+      min-height: 30px;
+      max-height: 60px;
+      overflow: hidden;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="header-title">🟦 MC Bot Overlay</span>
+    <button class="header-close" id="closeBtn">✕</button>
+  </div>
+  <div class="body">
+    <div class="status-row">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="status-name" id="statusName">Нет бота</span>
+      <span class="status-hp" id="statusHP"></span>
+    </div>
+
+    <div id="deathNotif" class="notification">💀 Бот умер!</div>
+
+    <div class="section-label">Ферма деревьев</div>
+    <div class="row">
+      <select id="treeType">
+        <option value="oak">Дуб</option>
+        <option value="birch">Берёза</option>
+        <option value="spruce">Ель</option>
+        <option value="jungle">Джунгли</option>
+        <option value="acacia">Акация</option>
+        <option value="dark_oak">Тёмный дуб</option>
+      </select>
+      <input type="number" id="treeRadius" value="16" min="4" max="64" style="width:60px" placeholder="R" />
+    </div>
+    <div class="row">
+      <button class="btn-success btn-half" id="startFarm">▶ Ферма</button>
+      <button class="btn-danger btn-half" id="stopTask">■ Стоп</button>
+    </div>
+
+    <div class="section-label">Режим анархии</div>
+    <div class="row">
+      <button class="btn-warn btn-half" id="startAnarchy">⚡ Анархия ON</button>
+      <button class="btn-neutral btn-half" id="stopAnarchy">⊘ OFF</button>
+    </div>
+
+    <div class="section-label">Управление</div>
+    <div class="row">
+      <button class="btn-primary btn-half" id="connectBot">🔗 Подключить</button>
+      <button class="btn-danger btn-half" id="disconnectBot">✕ Откл.</button>
+    </div>
+
+    <div class="log-box" id="logBox">—</div>
+  </div>
+
+  <script>
+    const api = window.overlayAPI;
+
+    let activeBotId = null;
+    let statsInterval = null;
+
+    async function refreshBots() {
+      try {
+        const bots = await api.getAll();
+        const online = bots.find(b => b.status === "online") || bots[0];
+        if (!online) { setStatus(null); return; }
+        activeBotId = online.id;
+        const dot = document.getElementById("statusDot");
+        dot.className = "status-dot " + (online.status === "online" ? "online" : "offline");
+        document.getElementById("statusName").textContent = (online.config.nick || "Bot") + "@" + (online.config.host || "?");
+        if (online.stats) {
+          document.getElementById("statusHP").textContent = "❤" + Math.round(online.stats.health || 0);
+        }
+      } catch {}
+    }
+
+    function setStatus(bot) {
+      if (!bot) {
+        document.getElementById("statusDot").className = "status-dot offline";
+        document.getElementById("statusName").textContent = "Нет бота";
+        document.getElementById("statusHP").textContent = "";
+      }
+    }
+
+    function log(msg) {
+      document.getElementById("logBox").textContent = msg;
+    }
+
+    // Кнопки
+    document.getElementById("closeBtn").onclick = () => api.closeOverlay();
+
+    document.getElementById("startFarm").onclick = async () => {
+      if (!activeBotId) { log("Нет активного бота"); return; }
+      const type = document.getElementById("treeType").value;
+      const radius = parseInt(document.getElementById("treeRadius").value) || 16;
+      await api.runTask(activeBotId, "farm_trees", { treeType: type, radius });
+      log("🌲 Ферма " + type + " запущена");
+    };
+
+    document.getElementById("stopTask").onclick = async () => {
+      if (!activeBotId) return;
+      await api.stopTask(activeBotId);
+      log("⏹ Задача остановлена");
+    };
+
+    document.getElementById("startAnarchy").onclick = async () => {
+      if (!activeBotId) { log("Нет активного бота"); return; }
+      await api.startAnarchy(activeBotId, {});
+      log("⚡ Анархия включена");
+    };
+
+    document.getElementById("stopAnarchy").onclick = async () => {
+      if (!activeBotId) return;
+      await api.stopAnarchy(activeBotId);
+      log("⊘ Анархия выключена");
+    };
+
+    document.getElementById("connectBot").onclick = async () => {
+      if (!activeBotId) { log("Нет бота"); return; }
+      await api.connect(activeBotId);
+      log("🔗 Подключение...");
+    };
+
+    document.getElementById("disconnectBot").onclick = async () => {
+      if (!activeBotId) return;
+      await api.disconnect(activeBotId);
+      log("✕ Отключён");
+    };
+
+    // Уведомление о смерти
+    api.onDeath(() => {
+      const n = document.getElementById("deathNotif");
+      n.classList.add("show");
+      log("💀 Бот погиб!");
+      setTimeout(() => n.classList.remove("show"), 8000);
+    });
+
+    // Обновление статуса каждые 3 сек
+    refreshBots();
+    setInterval(refreshBots, 3000);
+  </script>
+</body>
+</html>
